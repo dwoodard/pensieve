@@ -17,12 +17,12 @@ export async function ingestTurn(turn: Turn): Promise<void> {
   }
 
   const { repoRoot } = detected;
-  const projectMemoryDir = path.join(repoRoot, ".project-memory");
+  const projectMemoryDir = path.join(repoRoot, ".pensive");
   let config;
   try {
     config = readProjectConfig(projectMemoryDir);
   } catch {
-    console.error("Project not initialized. Run: project-memory init");
+    console.error("Project not initialized. Run: pensive init");
     return;
   }
   const { conn } = getDb(projectMemoryDir);

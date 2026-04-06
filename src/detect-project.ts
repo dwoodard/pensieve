@@ -43,7 +43,7 @@ export function resolveProjectIdentity(repoRoot: string): {
   }
 
   // No remote — check if we already generated a stable ID
-  const configPath = path.join(repoRoot, ".project-memory", "config.json");
+  const configPath = path.join(repoRoot, ".pensive", "config.json");
   if (fs.existsSync(configPath)) {
     const config: ProjectConfig = JSON.parse(
       fs.readFileSync(configPath, "utf-8")

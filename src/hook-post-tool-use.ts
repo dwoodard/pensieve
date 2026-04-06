@@ -5,11 +5,11 @@
  *
  * Artifact strategy (Option A — reference, don't copy):
  *   - If the written file is tracked by git → record Artifact node with location only
- *   - If not tracked by git → copy to .project-memory/artifacts/ and record that path
+ *   - If not tracked by git → copy to .pensive/artifacts/ and record that path
  *
  * We skip:
  *   - edits to existing files (only new file creation is artifact-worthy)
- *   - files inside .project-memory/ itself
+ *   - files inside .pensive/ itself
  *   - non-document files (not .md, .txt, .json, .yaml, .yml)
  */
 
@@ -139,8 +139,8 @@ async function main(): Promise<void> {
   const ext = path.extname(filePath).toLowerCase();
   if (!ARTIFACT_EXTENSIONS.has(ext)) process.exit(0);
 
-  // Skip files inside .project-memory/
-  if (filePath.includes(".project-memory")) process.exit(0);
+  // Skip files inside .pensive/
+  if (filePath.includes(".pensive")) process.exit(0);
 
   try {
     const projectMemoryDir = findProjectMemoryDir(payload.cwd);

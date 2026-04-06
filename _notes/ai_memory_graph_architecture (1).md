@@ -875,7 +875,7 @@ Recommended shape:
 
 ```text
 your-repo/
-  .project-memory/
+  .pensive/
 ```
 
 This directory should be the **local runtime workspace**, not the long-term database.
@@ -894,7 +894,7 @@ Its purpose is to hold:
 Example structure:
 
 ```text
-.project-memory/
+.pensive/
   config.json
   sessions/
   interactions/
@@ -936,7 +936,7 @@ The first time AI is used inside a repo, the runtime should:
 1. detect repo root
 2. resolve repo name, remote, and branch
 3. create or match a `Project`
-4. create `.project-memory/`
+4. create `.pensive/`
 5. initialize project config
 6. create the first `Session`
 7. start logging interactions locally
@@ -986,7 +986,7 @@ This keeps the default experience relevant and avoids contamination from unrelat
 The runtime should be responsible for:
 
 - detecting the active project
-- managing `.project-memory/`
+- managing `.pensive/`
 - opening and updating sessions
 - retrieving context
 - recording interactions
@@ -1063,7 +1063,7 @@ The system should behave like:
 The next major areas to define are:
 
 1. **Runtime entry points** — how editor, CLI, and agents route through the system
-2. **Local workspace format** — what exactly lives in `.project-memory/`
+2. **Local workspace format** — what exactly lives in `.pensive/`
 3. **Sync strategy** — when local state becomes durable central memory
 4. **Memory ranking strategy** — how retrieval prioritizes memories and artifacts
 5. **Cross-project promotion** — how local project knowledge becomes globally reusable

@@ -31,13 +31,13 @@ A memory is only kept if it is useful later without rereading the chat, or it he
 
 - Kuzu is an embeddable graph DB with native vector search
 - No server required — files live on disk
-- Sits inside `.project-memory/` in each repo
+- Sits inside `.pensive/` in each repo
 - Gives Cypher-style graph traversal + semantic vector search
 
 ### Init: Explicit CLI command
 
 ```
-project-memory init
+pensive init
 ```
 
 Runs once per repo. Sets up everything needed.
@@ -45,7 +45,7 @@ Runs once per repo. Sets up everything needed.
 ### Per-project structure
 
 ```
-.project-memory/
+.pensive/
   config.json         # project identity
   kuzu/               # Kuzu DB files
   sessions/           # raw session logs (noisy, not queried by AI)
@@ -57,14 +57,14 @@ Runs once per repo. Sets up everything needed.
 
 ---
 
-## What `project-memory init` Does
+## What `pensive init` Does
 
 1. Detect git repo root
-2. Create `.project-memory/`
+2. Create `.pensive/`
 3. Initialize Kuzu DB and apply schema
 4. Write `config.json` with project identity
 5. Create the first `Project` node in the DB
-6. Add `.project-memory/` to `.gitignore`
+6. Add `.pensive/` to `.gitignore`
 
 Must be safely re-runnable (idempotent — detect existing setup and skip).
 
@@ -136,7 +136,7 @@ Fallback: if no remote exists, use repo directory name + a generated UUID stored
   "type": "design_doc",
   "title": "...",
   "summary": "...",
-  "location": ".project-memory/artifacts/art_001.md",
+  "location": ".pensive/artifacts/art_001.md",
   "createdAt": "...",
   "embedding_id": "..."
 }
@@ -288,7 +288,7 @@ The system infers mode from the active task state:
 {
   "id": "mem_001",
   "kind": "task",
-  "title": "Implement project-memory init",
+  "title": "Implement pensive init",
   "summary": "...",
   "status": "active",
   "projectId": "...",
@@ -351,16 +351,16 @@ Core tools:
 ### Core
 
 ```
-project-memory init
-project-memory ingest-turn --input <file>
+pensive init
+pensive ingest-turn --input <file>
 ```
 
 ### Optional (later)
 
 ```
-project-memory sync
-project-memory recall
-project-memory status
+pensive sync
+pensive recall
+pensive status
 ```
 
 ---
@@ -369,7 +369,7 @@ project-memory status
 
 The first integration point is a Claude Code post-turn hook that:
 1. Captures the completed turn as a JSON file
-2. Calls `project-memory ingest-turn --input <file>`
+2. Calls `pensive ingest-turn --input <file>`
 
 Why Claude Code first:
 - deterministic (hook always fires)
@@ -382,7 +382,7 @@ Why Claude Code first:
 ## Tool Structure
 
 ```
-project-memory/
+pensive/
   src/
     index.ts            # entry point, orchestrates pipeline
     detect-project.ts   # find repo root, resolve project identity
@@ -406,7 +406,7 @@ project-memory/
 **NEVER:**
 - Raw session logs
 - Candidate files
-- Local `.project-memory/` files directly
+- Local `.pensive/` files directly
 
 ---
 
@@ -420,7 +420,7 @@ project-memory/
 
 ### Implementation order
 - [ ] Implement CLI skeleton
-- [ ] Implement `project-memory init`
+- [ ] Implement `pensive init`
 - [ ] Implement `detect-project.ts`
 - [ ] Implement Kuzu schema + migrations
 - [ ] Implement `append-turn.ts`

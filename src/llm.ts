@@ -11,7 +11,7 @@ interface EmbeddingResponse {
 
 function getProjectMemoryDir(): string {
   const dir = findProjectMemoryDir(process.cwd());
-  if (!dir) throw new Error("Not in an initialized project. Run: project-memory init");
+  if (!dir) throw new Error("Not in an initialized project. Run: pensive init");
   return dir;
 }
 

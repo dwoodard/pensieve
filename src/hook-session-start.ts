@@ -65,16 +65,16 @@ function buildBundle(
     remaining -= safe.length + 1;
   };
 
-  push(`## project-memory CLI`);
-  push(`project-memory tasks              — list tasks (gantt view)`);
-  push(`project-memory tasks start <n>    — set task active by queue position`);
-  push(`project-memory tasks done         — complete the active task`);
-  push(`project-memory tasks add "title"  — add a task to the queue`);
-  push(`project-memory tasks block "why"   — mark active task blocked`);
-  push(`project-memory tasks remove <n>   — delete a task by position or id`);
-  push(`project-memory tasks move <f> <t> — reorder queue`);
-  push(`project-memory context            — show full memory context`);
-  push(`project-memory status             — show memory stats`);
+  push(`## pensive CLI`);
+  push(`pensive tasks              — list tasks (gantt view)`);
+  push(`pensive tasks start <n>    — set task active by queue position`);
+  push(`pensive tasks done         — complete the active task`);
+  push(`pensive tasks add "title"  — add a task to the queue`);
+  push(`pensive tasks block "why"   — mark active task blocked`);
+  push(`pensive tasks remove <n>   — delete a task by position or id`);
+  push(`pensive tasks move <f> <t> — reorder queue`);
+  push(`pensive context            — show full memory context`);
+  push(`pensive status             — show memory stats`);
   push("");
 
   const hasTasks = activeTask !== null || pending.length > 0;
@@ -88,7 +88,7 @@ function buildBundle(
       push(`Queue:`);
       pending.forEach((t, i) => push(`  ${i + 1}. ${t.title}`));
     }
-    push(`Work the active task. When done run: project-memory tasks done`);
+    push(`Work the active task. When done run: pensive tasks done`);
     push("");
   }
 

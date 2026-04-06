@@ -72,7 +72,7 @@ export function formatContextBundle(bundle: ContextBundle): string {
       "## Project Memory Context",
       "",
       "No memories yet. Memories are extracted automatically at the end of each AI turn.",
-      "Run: project-memory config  to set your LLM and embedding models.",
+      "Run: pensive config  to set your LLM and embedding models.",
     ].join("\n");
   }
 

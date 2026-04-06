@@ -12,7 +12,7 @@ export async function initProject(cwd: string): Promise<void> {
   }
 
   const { repoRoot, remoteUrl, projectName } = detected;
-  const projectMemoryDir = path.join(repoRoot, ".project-memory");
+  const projectMemoryDir = path.join(repoRoot, ".pensive");
   const configPath = path.join(projectMemoryDir, "config.json");
 
   // Idempotent — check if already initialized
@@ -62,12 +62,12 @@ export async function initProject(cwd: string): Promise<void> {
     })`
   );
 
-  // Add .project-memory to .gitignore
+  // Add .pensive to .gitignore
   const gitignorePath = path.join(repoRoot, ".gitignore");
-  const entry = ".project-memory/\n";
+  const entry = ".pensive/\n";
   if (fs.existsSync(gitignorePath)) {
     const contents = fs.readFileSync(gitignorePath, "utf-8");
-    if (!contents.includes(".project-memory")) fs.appendFileSync(gitignorePath, `\n${entry}`);
+    if (!contents.includes(".pensive")) fs.appendFileSync(gitignorePath, `\n${entry}`);
   } else {
     fs.writeFileSync(gitignorePath, entry);
   }
@@ -80,7 +80,7 @@ export async function initProject(cwd: string): Promise<void> {
   console.log(`  Remote: ${remoteUrl}`);
   console.log(`  Path:   ${projectMemoryDir}`);
   console.log(`  Hooks:  .claude/settings.json`);
-  console.log(`  Run "project-memory config" to set your LLM and embedding models.`);
+  console.log(`  Run "pensive config" to set your LLM and embedding models.`);
 }
 
 function writeClaudeSettings(repoRoot: string): void {
@@ -88,11 +88,11 @@ function writeClaudeSettings(repoRoot: string): void {
   const settingsPath = path.join(claudeDir, "settings.json");
   fs.mkdirSync(claudeDir, { recursive: true });
 
-  // The hook commands use "project-memory hook <type>" — portable, no hardcoded paths.
-  // Requires project-memory to be on PATH (npm install -g project-memory).
+  // The hook commands use "pensive hook <type>" — portable, no hardcoded paths.
+  // Requires pensive to be on PATH (npm install -g pensive).
   const hookEntry = (type: string) => ({
     matcher: "",
-    hooks: [{ type: "command", command: `project-memory hook ${type}` }],
+    hooks: [{ type: "command", command: `pensive hook ${type}` }],
   });
 
   let existing: Record<string, unknown> = {};
@@ -105,7 +105,7 @@ function writeClaudeSettings(repoRoot: string): void {
 
   const upsertHook = (event: string, type: string) => {
     const entries = (hooks[event] as Array<{ hooks: Array<{ command: string }> }> | undefined) ?? [];
-    const cmd = `project-memory hook ${type}`;
+    const cmd = `pensive hook ${type}`;
     const alreadyPresent = entries.some((e) => e.hooks?.some((h) => h.command === cmd));
     if (!alreadyPresent) entries.push(hookEntry(type));
     hooks[event] = entries;

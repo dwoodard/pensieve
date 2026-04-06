@@ -23,7 +23,7 @@ import type { Turn } from "./types.js";
 const program = new Command();
 
 program
-  .name("project-memory")
+  .name("pensive")
   .description("Deterministic memory system for AI-assisted coding sessions")
   .version("1.0.0");
 
@@ -71,12 +71,12 @@ program
 
       const projectMemoryDir = path.join(
         detected.repoRoot,
-        ".project-memory"
+        ".pensive"
       );
       const configPath = path.join(projectMemoryDir, "config.json");
 
       if (!fs.existsSync(configPath)) {
-        console.error("Not initialized. Run: project-memory init");
+        console.error("Not initialized. Run: pensive init");
         process.exit(1);
       }
 
@@ -120,11 +120,11 @@ program
       return;
     }
 
-    const projectMemoryDir = path.join(detected.repoRoot, ".project-memory");
+    const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
     const configPath = path.join(projectMemoryDir, "config.json");
 
     if (!fs.existsSync(configPath)) {
-      console.log("Not initialized. Run: project-memory init");
+      console.log("Not initialized. Run: pensive init");
       return;
     }
 
@@ -171,7 +171,7 @@ program
     const detected = detectProject(process.cwd());
     if (!detected) { console.error("Not in a git repository."); process.exit(1); }
 
-    const projectMemoryDir = path.join(detected.repoRoot, ".project-memory");
+    const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
     const config = readProjectConfig(projectMemoryDir);
     const { conn } = getDb(projectMemoryDir);
 
@@ -224,7 +224,7 @@ program
     const detected = detectProject(process.cwd());
     if (!detected) { console.error("Not in a git repository."); process.exit(1); }
 
-    const projectMemoryDir = path.join(detected.repoRoot, ".project-memory");
+    const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
     const config = readProjectConfig(projectMemoryDir);
     const { conn } = getDb(projectMemoryDir);
 
@@ -296,11 +296,11 @@ program
       process.exit(1);
     }
 
-    const projectMemoryDir = path.join(detected.repoRoot, ".project-memory");
+    const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
     const configPath = path.join(projectMemoryDir, "config.json");
 
     if (!fs.existsSync(configPath)) {
-      console.error("Not initialized. Run: project-memory init");
+      console.error("Not initialized. Run: pensive init");
       process.exit(1);
     }
 
@@ -351,10 +351,10 @@ program
       console.error("Not in a git repository.");
       process.exit(1);
     }
-    const projectMemoryDir = path.join(detected.repoRoot, ".project-memory");
+    const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
     const configPath = path.join(projectMemoryDir, "config.json");
     if (!fs.existsSync(configPath)) {
-      console.error("Not initialized. Run: project-memory init");
+      console.error("Not initialized. Run: pensive init");
       process.exit(1);
     }
     const config = readProjectConfig(projectMemoryDir);
@@ -448,7 +448,7 @@ program
     config.embedding = { provider: embProvider, model: embModel, baseUrl: embBaseUrl, apiKey: embApiKey };
     writeProjectConfig(projectMemoryDir, config);
 
-    console.log(`\nSaved to .project-memory/config.json`);
+    console.log(`\nSaved to .pensive/config.json`);
     console.log(`  LLM:       ${llmProvider} / ${llmModel}`);
     console.log(`  Embedding: ${embProvider} / ${embModel}`);
   });
@@ -461,10 +461,10 @@ async function getProjectDb(cwd: string) {
     console.error("Not in a git repository.");
     process.exit(1);
   }
-  const projectMemoryDir = path.join(detected.repoRoot, ".project-memory");
+  const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
   const configPath = path.join(projectMemoryDir, "config.json");
   if (!fs.existsSync(configPath)) {
-    console.error("Not initialized. Run: project-memory init");
+    console.error("Not initialized. Run: pensive init");
     process.exit(1);
   }
   const config = readProjectConfig(projectMemoryDir);
@@ -484,7 +484,7 @@ function printTaskList(
   done: Record<string, unknown>[]
 ): void {
   if (!active && pending.length === 0 && blocked.length === 0 && done.length === 0) {
-    console.log("No tasks. Add one: project-memory tasks add \"title\"");
+    console.log("No tasks. Add one: pensive tasks add \"title\"");
     return;
   }
 
@@ -627,7 +627,7 @@ tasksCmd
     }
 
     if (!target_id) {
-      console.error(`No pending task matching "${target}". Run: project-memory tasks`);
+      console.error(`No pending task matching "${target}". Run: pensive tasks`);
       process.exit(1);
     }
 
@@ -672,7 +672,7 @@ tasksCmd
        RETURN m ORDER BY m.taskOrder ASC LIMIT 1`);
     if (next.length > 0) {
       const n = next[0]["m"] as Record<string, unknown>;
-      console.log(`Next up: ${n["title"]}  — run: project-memory tasks start 1`);
+      console.log(`Next up: ${n["title"]}  — run: pensive tasks start 1`);
     }
   });
 
@@ -743,7 +743,7 @@ tasksCmd
     }
 
     if (!targetId) {
-      console.error(`No task matching "${target}". Run: project-memory tasks`);
+      console.error(`No task matching "${target}". Run: pensive tasks`);
       process.exit(1);
     }
 
@@ -850,7 +850,7 @@ sessionsCmd
     const sessions = rows.map((r) => r["s"] as Record<string, unknown>);
     const match = sessions.find((s) => String(s["id"]).includes(target));
     if (!match) {
-      console.error(`No session matching "${target}". Run: project-memory sessions`);
+      console.error(`No session matching "${target}". Run: pensive sessions`);
       process.exit(1);
     }
     const sid = String(match["id"]);
