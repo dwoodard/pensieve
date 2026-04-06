@@ -631,10 +631,14 @@ tasksCmd
       process.exit(1);
     }
 
-    // Demote any currently active task
+    // Demote any currently active task — push it to front of queue
+    const minOrderRows = await queryAll(conn,
+      `MATCH (m:Task {projectId: '${esc(pid)}', status: 'pending'})
+       RETURN min(m.taskOrder) AS minOrder`);
+    const minOrder = Number(minOrderRows[0]?.["minOrder"] ?? 1);
     await conn.query(
       `MATCH (m:Task {projectId: '${esc(pid)}', status: 'active'})
-       SET m.status = 'pending'`
+       SET m.status = 'pending', m.taskOrder = ${minOrder - 1}`
     );
     await conn.query(
       `MATCH (m:Task {id: '${esc(target_id)}'}) SET m.status = 'active'`
@@ -665,15 +669,6 @@ tasksCmd
       `MATCH (m:Task {id: '${esc(String(task["id"]))}' }) SET m.status = 'done'`
     );
     console.log(`Done: ${task["title"]}`);
-
-    // Show next pending task as a reminder
-    const next = await queryAll(conn,
-      `MATCH (m:Task {projectId: '${pid}', status: 'pending'})
-       RETURN m ORDER BY m.taskOrder ASC LIMIT 1`);
-    if (next.length > 0) {
-      const n = next[0]["m"] as Record<string, unknown>;
-      console.log(`Next up: ${n["title"]}  — run: pensive tasks start 1`);
-    }
   });
 
 tasksCmd
