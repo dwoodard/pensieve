@@ -110,8 +110,11 @@ function writeClaudeSettings(projectRoot: string): void {
 
   for (const [event, type] of HOOK_EVENTS) {
     const cmd = `pensive hook ${type}`;
-    const entries = (hooks[event] as Array<{ hooks: Array<{ command: string }> }> | undefined) ?? [];
-    const alreadyPresent = entries.some((e) => e.hooks?.some((h) => h.command === cmd));
+    const entries = (hooks[event] as Array<Record<string, unknown>> | undefined) ?? [];
+    const alreadyPresent = entries.some((e) => {
+      const inner = e["hooks"] as Array<Record<string, unknown>> | undefined;
+      return Array.isArray(inner) && inner.some((h) => h["command"] === cmd);
+    });
     if (!alreadyPresent) {
       entries.push({ matcher: "", hooks: [{ type: "command", command: cmd }] });
     }
