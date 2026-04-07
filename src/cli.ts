@@ -32,7 +32,7 @@ program
 
 program
   .command("init")
-  .description("Initialize project memory in the current git repository")
+  .description("Initialize project memory in the current directory")
   .action(async () => {
     try {
       await initProject(process.cwd());
@@ -65,12 +65,12 @@ program
     try {
       const detected = detectProject(process.cwd());
       if (!detected) {
-        cerr("No git repo found.");
+        cerr("No pensive project found. Run: pensive init");
         process.exit(1);
       }
 
       const projectMemoryDir = path.join(
-        detected.repoRoot,
+        detected.projectRoot,
         ".pensive"
       );
       const configPath = path.join(projectMemoryDir, "config.json");
@@ -113,11 +113,11 @@ program
   .action(async () => {
     const detected = detectProject(process.cwd());
     if (!detected) {
-      console.log("Not in a git repository.");
+      console.log("No pensive project found. Run: pensive init");
       return;
     }
 
-    const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
+    const projectMemoryDir = path.join(detected.projectRoot, ".pensive");
     const configPath = path.join(projectMemoryDir, "config.json");
 
     if (!fs.existsSync(configPath)) {
@@ -166,9 +166,9 @@ program
   .option("-k, --top <n>", "Number of results", "5")
   .action(async (query: string, opts) => {
     const detected = detectProject(process.cwd());
-    if (!detected) { cerr("Not in a git repository."); process.exit(1); }
+    if (!detected) { cerr("No pensive project found. Run: pensive init"); process.exit(1); }
 
-    const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
+    const projectMemoryDir = path.join(detected.projectRoot, ".pensive");
     const config = readProjectConfig(projectMemoryDir);
     const { conn } = getDb(projectMemoryDir);
 
@@ -219,9 +219,9 @@ program
   .description("Generate and store embeddings for all Memory nodes that are missing them")
   .action(async () => {
     const detected = detectProject(process.cwd());
-    if (!detected) { cerr("Not in a git repository."); process.exit(1); }
+    if (!detected) { cerr("No pensive project found. Run: pensive init"); process.exit(1); }
 
-    const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
+    const projectMemoryDir = path.join(detected.projectRoot, ".pensive");
     const config = readProjectConfig(projectMemoryDir);
     const { conn } = getDb(projectMemoryDir);
 
@@ -289,11 +289,11 @@ program
 
     const detected = detectProject(process.cwd());
     if (!detected) {
-      cerr("Not in a git repository.");
+      cerr("No pensive project found. Run: pensive init");
       process.exit(1);
     }
 
-    const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
+    const projectMemoryDir = path.join(detected.projectRoot, ".pensive");
     const configPath = path.join(projectMemoryDir, "config.json");
 
     if (!fs.existsSync(configPath)) {
@@ -345,10 +345,10 @@ program
 
     const detected = detectProject(process.cwd());
     if (!detected) {
-      cerr("Not in a git repository.");
+      cerr("No pensive project found. Run: pensive init");
       process.exit(1);
     }
-    const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
+    const projectMemoryDir = path.join(detected.projectRoot, ".pensive");
     const configPath = path.join(projectMemoryDir, "config.json");
     if (!fs.existsSync(configPath)) {
       cerr("Not initialized. Run: pensive init");
@@ -455,10 +455,10 @@ program
 async function getProjectDb(cwd: string) {
   const detected = detectProject(cwd);
   if (!detected) {
-    cerr("Not in a git repository.");
+    cerr("No pensive project found. Run: pensive init");
     process.exit(1);
   }
-  const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
+  const projectMemoryDir = path.join(detected.projectRoot, ".pensive");
   const configPath = path.join(projectMemoryDir, "config.json");
   if (!fs.existsSync(configPath)) {
     cerr("Not initialized. Run: pensive init");

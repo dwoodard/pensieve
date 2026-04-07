@@ -1,18 +1,16 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { detectProject } from "./detect-project.js";
+import { resolveProjectIdentity } from "./detect-project.js";
 import { getDb, applySchema } from "./db.js";
 import { DEFAULT_LLM, DEFAULT_EMBEDDING, type ProjectConfig } from "./config.js";
 
 export async function initProject(cwd: string): Promise<void> {
-  const detected = detectProject(cwd);
-  if (!detected) {
-    throw new Error("Not inside a git repository. Run git init first.");
-  }
-
-  const { repoRoot, remoteUrl, projectName } = detected;
-  const projectMemoryDir = path.join(repoRoot, ".pensive");
+  // Use cwd directly as the project root — no git required
+  const projectRoot = cwd;
+  const { remoteUrl, projectName } = resolveProjectIdentity(projectRoot);
+  const repoRoot = projectRoot;
+  const projectMemoryDir = path.join(projectRoot, ".pensive");
   const configPath = path.join(projectMemoryDir, "config.json");
 
   // Idempotent — check if already initialized
@@ -64,14 +62,17 @@ export async function initProject(cwd: string): Promise<void> {
     })`
   );
 
-  // Add .pensive to .gitignore
-  const gitignorePath = path.join(repoRoot, ".gitignore");
-  const entry = ".pensive/\n";
-  if (fs.existsSync(gitignorePath)) {
-    const contents = fs.readFileSync(gitignorePath, "utf-8");
-    if (!contents.includes(".pensive")) fs.appendFileSync(gitignorePath, `\n${entry}`);
-  } else {
-    fs.writeFileSync(gitignorePath, entry);
+  // Add .pensive to .gitignore only if this is a git repo
+  const gitDir = path.join(repoRoot, ".git");
+  if (fs.existsSync(gitDir)) {
+    const gitignorePath = path.join(repoRoot, ".gitignore");
+    const entry = ".pensive/\n";
+    if (fs.existsSync(gitignorePath)) {
+      const contents = fs.readFileSync(gitignorePath, "utf-8");
+      if (!contents.includes(".pensive")) fs.appendFileSync(gitignorePath, `\n${entry}`);
+    } else {
+      fs.writeFileSync(gitignorePath, entry);
+    }
   }
 
   // Write hook registrations to both .claude/ and .github/

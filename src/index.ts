@@ -12,12 +12,12 @@ import type { Turn } from "./types.js";
 export async function ingestTurn(turn: Turn): Promise<void> {
   const detected = detectProject(turn.cwd);
   if (!detected) {
-    console.error("No git repo found at:", turn.cwd);
+    console.error("No pensive project found at:", turn.cwd);
     return;
   }
 
-  const { repoRoot } = detected;
-  const projectMemoryDir = path.join(repoRoot, ".pensive");
+  const { projectRoot } = detected;
+  const projectMemoryDir = path.join(projectRoot, ".pensive");
   let config;
   try {
     config = readProjectConfig(projectMemoryDir);

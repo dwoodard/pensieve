@@ -146,7 +146,7 @@ async function main(): Promise<void> {
     const projectMemoryDir = findProjectMemoryDir(payload.cwd);
     if (!projectMemoryDir) process.exit(0);
 
-    const repoRoot = path.dirname(projectMemoryDir);
+    const rootDir = path.dirname(projectMemoryDir);
 
     const config = readProjectConfig(projectMemoryDir);
     const { conn } = getDb(projectMemoryDir);
@@ -155,7 +155,7 @@ async function main(): Promise<void> {
       payload.session_id,
       config.projectId,
       filePath,
-      repoRoot,
+      rootDir,
       projectMemoryDir,
       conn
     );

@@ -1,23 +1,23 @@
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import * as crypto from "crypto";
-import type { ProjectConfig } from "./config.js";
 
-export function findRepoRoot(startDir: string): string | null {
+/** Walk up from startDir looking for a .pensive/config.json — returns that dir or null */
+export function findProjectRoot(startDir: string): string | null {
   let dir = startDir;
   while (true) {
-    if (fs.existsSync(path.join(dir, ".git"))) return dir;
+    if (fs.existsSync(path.join(dir, ".pensive", "config.json"))) return dir;
     const parent = path.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
 }
 
-export function getRemoteUrl(repoRoot: string): string | null {
+/** Try to get git remote — optional enrichment, not required */
+export function getRemoteUrl(dir: string): string | null {
   try {
     return execSync("git remote get-url origin", {
-      cwd: repoRoot,
+      cwd: dir,
       stdio: ["pipe", "pipe", "pipe"],
     })
       .toString()
@@ -27,46 +27,33 @@ export function getRemoteUrl(repoRoot: string): string | null {
   }
 }
 
-export function getRepoName(repoRoot: string): string {
-  return path.basename(repoRoot);
-}
-
-export function resolveProjectIdentity(repoRoot: string): {
+export function resolveProjectIdentity(projectRoot: string): {
   remoteUrl: string;
   projectName: string;
 } {
-  const remoteUrl = getRemoteUrl(repoRoot);
-  const projectName = getRepoName(repoRoot);
+  const projectName = path.basename(projectRoot);
+  const remoteUrl = getRemoteUrl(projectRoot);
 
   if (remoteUrl) {
     return { remoteUrl, projectName };
   }
 
-  // No remote — check if we already generated a stable ID
-  const configPath = path.join(repoRoot, ".pensive", "config.json");
-  if (fs.existsSync(configPath)) {
-    const config: ProjectConfig = JSON.parse(
-      fs.readFileSync(configPath, "utf-8")
-    );
-    return { remoteUrl: config.remoteUrl, projectName: config.projectName };
-  }
-
-  // Generate a stable fallback ID
-  const uuid = crypto.randomUUID();
+  // No git remote — use the directory path as the stable identity
   return {
-    remoteUrl: `local://${projectName}-${uuid}`,
+    remoteUrl: `local://${projectRoot}`,
     projectName,
   };
 }
 
+/** Find the nearest initialized pensive project walking up from cwd */
 export function detectProject(cwd: string): {
-  repoRoot: string;
+  projectRoot: string;
   remoteUrl: string;
   projectName: string;
 } | null {
-  const repoRoot = findRepoRoot(cwd);
-  if (!repoRoot) return null;
+  const projectRoot = findProjectRoot(cwd);
+  if (!projectRoot) return null;
 
-  const { remoteUrl, projectName } = resolveProjectIdentity(repoRoot);
-  return { repoRoot, remoteUrl, projectName };
+  const { remoteUrl, projectName } = resolveProjectIdentity(projectRoot);
+  return { projectRoot, remoteUrl, projectName };
 }
