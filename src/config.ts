@@ -11,7 +11,7 @@ export interface ModelConfig {
 export interface ProjectConfig {
   projectId: string;
   projectName: string;
-  remoteUrl: string;
+  remoteUrl?: string;
   repoPath: string;
   createdAt: string;
   llm: ModelConfig;

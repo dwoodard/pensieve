@@ -43,7 +43,7 @@ export async function initProject(cwd: string): Promise<void> {
   const config: ProjectConfig = {
     projectId,
     projectName,
-    remoteUrl,
+    ...(remoteUrl ? { remoteUrl } : {}),
     repoPath: repoRoot,
     createdAt: new Date().toISOString(),
     llm: { ...DEFAULT_LLM },
@@ -56,7 +56,7 @@ export async function initProject(cwd: string): Promise<void> {
     `CREATE (p:Project {
       id: '${projectId}',
       name: '${projectName.replace(/'/g, "\\'")}',
-      remoteUrl: '${remoteUrl.replace(/'/g, "\\'")}',
+      ${remoteUrl ? `remoteUrl: '${remoteUrl.replace(/'/g, "\\'")}',` : ""}
       repoPath: '${repoRoot.replace(/'/g, "\\'")}',
       createdAt: '${config.createdAt}'
     })`
@@ -81,7 +81,7 @@ export async function initProject(cwd: string): Promise<void> {
 
   console.log(`Initialized project: ${projectName}`);
   console.log(`  ID:     ${projectId}`);
-  console.log(`  Remote: ${remoteUrl}`);
+  if (remoteUrl) console.log(`  Remote: ${remoteUrl}`);
   console.log(`  Path:   ${projectMemoryDir}`);
   console.log(`  Hooks:  .claude/settings.json, .github/hooks/pensive.json`);
   console.log(`  Run "pensive config" to set your LLM and embedding models.`);

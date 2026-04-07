@@ -28,27 +28,18 @@ export function getRemoteUrl(dir: string): string | null {
 }
 
 export function resolveProjectIdentity(projectRoot: string): {
-  remoteUrl: string;
+  remoteUrl?: string;
   projectName: string;
 } {
   const projectName = path.basename(projectRoot);
-  const remoteUrl = getRemoteUrl(projectRoot);
-
-  if (remoteUrl) {
-    return { remoteUrl, projectName };
-  }
-
-  // No git remote — use the directory path as the stable identity
-  return {
-    remoteUrl: `local://${projectRoot}`,
-    projectName,
-  };
+  const remoteUrl = getRemoteUrl(projectRoot) ?? undefined;
+  return { remoteUrl, projectName };
 }
 
 /** Find the nearest initialized pensive project walking up from cwd */
 export function detectProject(cwd: string): {
   projectRoot: string;
-  remoteUrl: string;
+  remoteUrl?: string;
   projectName: string;
 } | null {
   const projectRoot = findProjectRoot(cwd);
