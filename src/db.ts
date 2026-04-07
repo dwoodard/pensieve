@@ -1,6 +1,7 @@
 import kuzu from "kuzu";
 import * as fs from "fs";
 import * as path from "path";
+import { cosineSimilarity } from "./search.js";
 
 const _cache = new Map<string, {
   db: InstanceType<typeof kuzu.Database>;
@@ -86,7 +87,7 @@ export async function applySchema(
     `CREATE REL TABLE IF NOT EXISTS PRODUCED(FROM Session TO Artifact)`,
     `CREATE REL TABLE IF NOT EXISTS REFERS_TO(FROM Memory TO Artifact)`,
     `CREATE REL TABLE IF NOT EXISTS SUPERSEDES(FROM Memory TO Memory)`,
-    `CREATE REL TABLE IF NOT EXISTS RELATED_TO(FROM Memory TO Memory)`,
+    `CREATE REL TABLE IF NOT EXISTS RELATED_TO(FROM Memory TO Memory, score FLOAT, createdAt STRING)`,
   ];
 
   for (const stmt of statements) {
@@ -146,6 +147,18 @@ export async function applySchema(
   try { await conn.query(`ALTER TABLE Session ADD archived BOOLEAN DEFAULT false`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Memory ADD embedding FLOAT[] DEFAULT []`); } catch { /* exists */ }
 
+  // Migration: recreate RELATED_TO with score + createdAt properties
+  try {
+    const result = await conn.query(`CALL table_info('RELATED_TO') RETURN *`);
+    const qr = Array.isArray(result) ? result[0] : result;
+    const cols = await (qr as { getAll(): Promise<Record<string, unknown>[]> }).getAll();
+    const hasScore = cols.some((c) => c["name"] === "score");
+    if (!hasScore) {
+      await conn.query(`DROP TABLE RELATED_TO`);
+      await conn.query(`CREATE REL TABLE RELATED_TO(FROM Memory TO Memory, score FLOAT, createdAt STRING)`);
+    }
+  } catch { /* table didn't exist yet — created fresh by applySchema above */ }
+
   // Backfill: connect orphaned Task nodes to their Project via HAS_TASK
   try {
     await conn.query(
@@ -155,4 +168,40 @@ export async function applySchema(
        CREATE (p)-[:HAS_TASK]->(t)`
     );
   } catch { /* no orphans or table doesn't exist yet */ }
+
+  // Backfill: create RELATED_TO edges for memories that have none yet
+  try {
+    const RELATED_THRESHOLD = 0.82;
+    const result = await conn.query(
+      `MATCH (m:Memory) WHERE size(m.embedding) > 0
+       AND NOT EXISTS { MATCH (m)-[:RELATED_TO]->(:Memory) }
+       RETURN m`
+    );
+    const qr = Array.isArray(result) ? result[0] : result;
+    const unlinked = await (qr as { getAll(): Promise<Record<string, unknown>[]> }).getAll();
+
+    if (unlinked.length > 0) {
+      const allResult = await conn.query(`MATCH (m:Memory) WHERE size(m.embedding) > 0 RETURN m`);
+      const aqr = Array.isArray(allResult) ? allResult[0] : allResult;
+      const all = await (aqr as { getAll(): Promise<Record<string, unknown>[]> }).getAll();
+
+      for (const row of unlinked) {
+        const a = row["m"] as { id: string; embedding: number[] };
+        const now = new Date().toISOString();
+        for (const other of all) {
+          const b = other["m"] as { id: string; embedding: number[] };
+          if (a.id === b.id) continue;
+          const sim = cosineSimilarity(a.embedding, b.embedding);
+          if (sim >= RELATED_THRESHOLD) {
+            const score = Math.round(sim * 10000) / 10000;
+            await conn.query(
+              `MATCH (a:Memory {id: '${a.id}'}), (b:Memory {id: '${b.id}'})
+               WHERE NOT EXISTS { MATCH (a)-[:RELATED_TO]->(b) }
+               CREATE (a)-[:RELATED_TO {score: ${score}, createdAt: '${now}'}]->(b)`
+            );
+          }
+        }
+      }
+    }
+  } catch { /* best-effort */ }
 }

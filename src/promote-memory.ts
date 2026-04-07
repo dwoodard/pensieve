@@ -26,9 +26,12 @@ async function linkRelatedMemories(
     const candidate = row["m"] as Memory & { embedding: number[] };
     const sim = cosineSimilarity(memory.embedding, candidate.embedding);
     if (sim >= RELATED_THRESHOLD) {
+      const now = new Date().toISOString();
+      const score = Math.round(sim * 10000) / 10000;
       await conn.query(
         `MATCH (a:Memory {id: '${escape(memory.id)}'}), (b:Memory {id: '${escape(candidate.id)}'})
-         CREATE (a)-[:RELATED_TO]->(b), (b)-[:RELATED_TO]->(a)`
+         CREATE (a)-[:RELATED_TO {score: ${score}, createdAt: '${now}'}]->(b),
+                (b)-[:RELATED_TO {score: ${score}, createdAt: '${now}'}]->(a)`
       );
     }
   }
