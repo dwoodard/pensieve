@@ -35,7 +35,6 @@ export interface Memory {
   projectId: string;
   sessionId: string;
   createdAt: string;
-  artifactId?: string;
   embedding?: number[];
 }
 
@@ -46,17 +45,6 @@ export interface Task {
   status: TaskStatus;
   taskOrder: number;
   projectId: string;
-  createdAt: string;
-}
-
-export interface Artifact {
-  id: string;
-  type: string;
-  title: string;
-  summary: string;
-  location: string;
-  projectId: string;
-  sessionId: string;
   createdAt: string;
 }
 

@@ -23,6 +23,81 @@ import type { Turn } from "./types.js";
 
 const cerr = (msg: string) => console.error(chalk.red(msg));
 
+async function runConfigPrompt(projectMemoryDir: string): Promise<void> {
+  const { select, input } = await import("@inquirer/prompts");
+  const config = readProjectConfig(projectMemoryDir);
+
+  const providerChoices = [
+    { name: "LM Studio  (local, free)", value: "lmstudio" },
+    { name: "Ollama     (local, free)", value: "ollama" },
+    { name: "OpenAI     (paid)", value: "openai" },
+    { name: "Anthropic  (paid)", value: "anthropic" },
+  ] as const;
+
+  async function fetchModels(baseUrl: string): Promise<{ id: string }[]> {
+    const base = baseUrl.replace(/\/+$/, "");
+    const url = base.endsWith("/v1") ? `${base}/models` : `${base}/v1/models`;
+    const res = await fetch(url);
+    const json = await res.json() as { data?: { id: string }[] };
+    return json.data ?? [];
+  }
+
+  async function pickModel(
+    label: string,
+    baseUrl: string,
+    isLocal: boolean,
+    currentModel: string,
+    filterFn?: (id: string) => boolean
+  ): Promise<string> {
+    if (!isLocal) return input({ message: `${label} model name:`, default: currentModel });
+    process.stdout.write(`Fetching ${label.toLowerCase()} models...`);
+    try {
+      const all = await fetchModels(baseUrl);
+      const filtered = filterFn ? all.filter((m) => filterFn(m.id)) : all;
+      process.stdout.write("\r\x1b[K");
+      if (filtered.length === 0) {
+        console.log(`  No ${label.toLowerCase()} models found, enter manually.`);
+        return input({ message: `${label} model name:`, default: currentModel });
+      }
+      return select({
+        message: `Select ${label.toLowerCase()} model:`,
+        choices: filtered.map((m) => ({ name: m.id, value: m.id })),
+        default: filtered.find((m) => m.id === currentModel)?.id ?? filtered[0].id,
+      });
+    } catch {
+      process.stdout.write("\r\x1b[K");
+      console.log(`  Could not reach ${baseUrl}, enter manually.`);
+      return input({ message: `${label} model name:`, default: currentModel });
+    }
+  }
+
+  console.log(chalk.bold.cyan("── LLM (used for memory extraction) ────"));
+  const llmProvider = await select({ message: "LLM provider:", choices: providerChoices, default: config.llm.provider });
+  const llmDefaults = PROVIDER_DEFAULTS[llmProvider];
+  const llmBaseUrl = await input({ message: "LLM base URL:", default: llmDefaults.baseUrl ?? config.llm.baseUrl });
+  const isLlmLocal = llmProvider === "lmstudio" || llmProvider === "ollama";
+  const llmModel = await pickModel("LLM", llmBaseUrl, isLlmLocal, llmDefaults.model ?? config.llm.model, (id) => !id.includes("embed"));
+  let llmApiKey = config.llm.apiKey;
+  if (!isLlmLocal) llmApiKey = await input({ message: "LLM API Key:", default: config.llm.apiKey || "" });
+
+  console.log(chalk.bold.cyan("\n── Embedding (used for vector search) ──"));
+  const embProvider = await select({ message: "Embedding provider:", choices: providerChoices, default: config.embedding.provider });
+  const embDefaults = PROVIDER_DEFAULTS[embProvider];
+  const embBaseUrl = await input({ message: "Embedding base URL:", default: embDefaults.baseUrl ?? config.embedding.baseUrl });
+  const isEmbLocal = embProvider === "lmstudio" || embProvider === "ollama";
+  const embModel = await pickModel("Embedding", embBaseUrl, isEmbLocal, embDefaults.model ?? config.embedding.model, (id) => id.includes("embed"));
+  let embApiKey = config.embedding.apiKey;
+  if (!isEmbLocal) embApiKey = await input({ message: "Embedding API Key:", default: config.embedding.apiKey || "" });
+
+  config.llm = { provider: llmProvider, model: llmModel, baseUrl: llmBaseUrl, apiKey: llmApiKey };
+  config.embedding = { provider: embProvider, model: embModel, baseUrl: embBaseUrl, apiKey: embApiKey };
+  writeProjectConfig(projectMemoryDir, config);
+
+  console.log(`\n${chalk.green("Saved to")} ${chalk.dim(".pensive/config.json")}`);
+  console.log(`  LLM:       ${chalk.white(llmProvider)} / ${chalk.dim(llmModel)}`);
+  console.log(`  Embedding: ${chalk.white(embProvider)} / ${chalk.dim(embModel)}`);
+}
+
 const program = new Command();
 
 program
@@ -35,7 +110,19 @@ program
   .description("Initialize project memory in the current directory")
   .action(async () => {
     try {
-      await initProject(process.cwd());
+      const freshInit = await initProject(process.cwd());
+      if (freshInit) {
+        // Offer to configure LLM right after a fresh init
+        const { confirm } = await import("@inquirer/prompts");
+        const doConfig = await confirm({ message: "Configure LLM and embedding models now?", default: true });
+        if (doConfig) {
+          const detected = detectProject(process.cwd());
+          if (detected) {
+            const projectMemoryDir = path.join(detected.projectRoot, ".pensive");
+            await runConfigPrompt(projectMemoryDir);
+          }
+        }
+      }
     } catch (err) {
       console.error(chalk.red("Init failed:"), err instanceof Error ? err.message : err);
       process.exit(1);
@@ -341,8 +428,6 @@ program
   .description("View or interactively set LLM configuration")
   .option("--set <key=value>", "Set a config value directly (e.g. llm.provider=ollama)")
   .action(async (opts) => {
-    const { select, input } = await import("@inquirer/prompts");
-
     const detected = detectProject(process.cwd());
     if (!detected) {
       cerr("No pensive project found. Run: pensive init");
@@ -376,78 +461,7 @@ program
     console.log(chalk.bold("\nCurrent config:"));
     console.log(`  LLM:       ${chalk.white(config.llm?.provider ?? "not set")} / ${chalk.dim(config.llm?.model ?? "not set")}`);
     console.log(`  Embedding: ${chalk.white(config.embedding?.provider ?? "not set")} / ${chalk.dim(config.embedding?.model ?? "not set")}\n`);
-
-    const providerChoices = [
-      { name: "LM Studio  (local, free)", value: "lmstudio" },
-      { name: "Ollama     (local, free)", value: "ollama" },
-      { name: "OpenAI     (paid)", value: "openai" },
-      { name: "Anthropic  (paid)", value: "anthropic" },
-    ] as const;
-
-    async function fetchModels(baseUrl: string): Promise<{ id: string }[]> {
-      const base = baseUrl.replace(/\/+$/, "");
-      const url = base.endsWith("/v1") ? `${base}/models` : `${base}/v1/models`;
-      const res = await fetch(url);
-      const json = await res.json() as { data?: { id: string }[] };
-      return json.data ?? [];
-    }
-
-    async function pickModel(
-      label: string,
-      baseUrl: string,
-      isLocal: boolean,
-      currentModel: string,
-      filterFn?: (id: string) => boolean
-    ): Promise<string> {
-      if (!isLocal) return input({ message: `${label} model name:`, default: currentModel });
-      process.stdout.write(`Fetching ${label.toLowerCase()} models...`);
-      try {
-        const all = await fetchModels(baseUrl);
-        const filtered = filterFn ? all.filter((m) => filterFn(m.id)) : all;
-        process.stdout.write("\r\x1b[K");
-        if (filtered.length === 0) {
-          console.log(`  No ${label.toLowerCase()} models found, enter manually.`);
-          return input({ message: `${label} model name:`, default: currentModel });
-        }
-        return select({
-          message: `Select ${label.toLowerCase()} model:`,
-          choices: filtered.map((m) => ({ name: m.id, value: m.id })),
-          default: filtered.find((m) => m.id === currentModel)?.id ?? filtered[0].id,
-        });
-      } catch {
-        process.stdout.write("\r\x1b[K");
-        console.log(`  Could not reach ${baseUrl}, enter manually.`);
-        return input({ message: `${label} model name:`, default: currentModel });
-      }
-    }
-
-    // --- LLM ---
-    console.log(chalk.bold.cyan("── LLM (used for memory extraction) ────"));
-    const llmProvider = await select({ message: "LLM provider:", choices: providerChoices, default: config.llm.provider });
-    const llmDefaults = PROVIDER_DEFAULTS[llmProvider];
-    const llmBaseUrl = await input({ message: "LLM base URL:", default: llmDefaults.baseUrl ?? config.llm.baseUrl });
-    const isLlmLocal = llmProvider === "lmstudio" || llmProvider === "ollama";
-    const llmModel = await pickModel("LLM", llmBaseUrl, isLlmLocal, llmDefaults.model ?? config.llm.model, (id) => !id.includes("embed"));
-    let llmApiKey = config.llm.apiKey;
-    if (!isLlmLocal) llmApiKey = await input({ message: "LLM API Key:", default: config.llm.apiKey || "" });
-
-    // --- Embedding ---
-    console.log(chalk.bold.cyan("\n── Embedding (used for vector search) ──"));
-    const embProvider = await select({ message: "Embedding provider:", choices: providerChoices, default: config.embedding.provider });
-    const embDefaults = PROVIDER_DEFAULTS[embProvider];
-    const embBaseUrl = await input({ message: "Embedding base URL:", default: embDefaults.baseUrl ?? config.embedding.baseUrl });
-    const isEmbLocal = embProvider === "lmstudio" || embProvider === "ollama";
-    const embModel = await pickModel("Embedding", embBaseUrl, isEmbLocal, embDefaults.model ?? config.embedding.model, (id) => id.includes("embed"));
-    let embApiKey = config.embedding.apiKey;
-    if (!isEmbLocal) embApiKey = await input({ message: "Embedding API Key:", default: config.embedding.apiKey || "" });
-
-    config.llm = { provider: llmProvider, model: llmModel, baseUrl: llmBaseUrl, apiKey: llmApiKey };
-    config.embedding = { provider: embProvider, model: embModel, baseUrl: embBaseUrl, apiKey: embApiKey };
-    writeProjectConfig(projectMemoryDir, config);
-
-    console.log(`\n${chalk.green("Saved to")} ${chalk.dim(".pensive/config.json")}`);
-    console.log(`  LLM:       ${chalk.white(llmProvider)} / ${chalk.dim(llmModel)}`);
-    console.log(`  Embedding: ${chalk.white(embProvider)} / ${chalk.dim(embModel)}`);
+    await runConfigPrompt(projectMemoryDir);
   });
 
 // ── Project ──────────────────────────────────────────────────────────────────
@@ -532,6 +546,14 @@ async function getProjectDb(cwd: string) {
 
 function shortId(id: string): string {
   return id.replace(/^(mem_|task_)/, "").slice(0, 6);
+}
+
+function sessionShortId(id: string): string {
+  // Strip well-known Claude Code session type prefixes (e.g. "manual_")
+  const stripped = id.replace(/^[a-z]+_/, "");
+  // If nothing was stripped (already a UUID etc.), use the raw id
+  const base = stripped.length > 0 && stripped !== id ? stripped : id;
+  return base.slice(0, 8);
 }
 
 function printTaskList(
@@ -885,7 +907,7 @@ sessionsCmd
       const archived = match["archived"] ? chalk.dim("  [archived]") : "";
 
       console.log(`\n${chalk.bold.cyan("── Session ──────────────────────────────")}`);
-      console.log(`  ID:      ${chalk.dim("[" + shortId(sid) + "]")}`);
+      console.log(`  ID:      ${chalk.dim("[" + sessionShortId(sid) + "]")}  ${chalk.dim(sid)}`);
       console.log(`  Started: ${chalk.dim(ts)}${archived}`);
       if (match["title"]) console.log(`  Title:   ${chalk.white(String(match["title"]))}`);
 
@@ -926,7 +948,7 @@ sessionsCmd
       const ts = s["startedAt"] ? new Date(String(s["startedAt"])).toLocaleString() : "unknown";
       const title = s["title"] ? `  ${s["title"]}` : "";
       const archived = s["archived"] ? chalk.dim("  [archived]") : "";
-      console.log(`  ${chalk.dim("[" + shortId(String(s["id"])) + "]")}  ${chalk.dim(ts)}${chalk.white(title)}${archived}`);
+      console.log(`  ${chalk.dim("[" + sessionShortId(String(s["id"])) + "]")}  ${chalk.dim(ts)}${chalk.white(title)}${archived}`);
     });
   });
 
@@ -961,13 +983,13 @@ sessionsCmd
     }
     const sid = String(match["id"]);
     await conn.query(`MATCH (s:Session {id: '${esc(sid)}'}) SET s.archived = true`);
-    console.log(`${chalk.green("Archived")} session ${chalk.dim("[" + shortId(sid) + "]")}.`);
+    console.log(`${chalk.green("Archived")} session ${chalk.dim("[" + sessionShortId(sid) + "]")}.`);
   });
 
 sessionsCmd
   .command("remove [target]")
   .description("Remove a session by id prefix; --all removes every session and its memories")
-  .option("--all", "Remove all sessions (and their memories/artifacts) for this project")
+  .option("--all", "Remove all sessions (and their memories) for this project")
   .action(async (target: string | undefined, opts: { all?: boolean }) => {
     const { config, conn } = await getProjectDb(process.cwd());
     const pid = config.projectId;
@@ -975,18 +997,15 @@ sessionsCmd
 
     if (opts.all) {
       const { confirm } = await import("@inquirer/prompts");
-      const ok = await confirm({ message: "Remove all sessions, memories, and artifacts for this project?", default: false });
+      const ok = await confirm({ message: "Remove all sessions and memories for this project?", default: false });
       if (!ok) { console.log(chalk.dim("Cancelled.")); return; }
       const mRows = await queryAll(conn, `MATCH (m:Memory {projectId: '${pid}'}) RETURN count(m) AS cnt`);
-      const aRows = await queryAll(conn, `MATCH (a:Artifact {projectId: '${pid}'}) RETURN count(a) AS cnt`);
       const sRows = await queryAll(conn, `MATCH (s:Session {projectId: '${pid}'}) RETURN count(s) AS cnt`);
       await conn.query(`MATCH (m:Memory {projectId: '${pid}'}) DETACH DELETE m`);
-      await conn.query(`MATCH (a:Artifact {projectId: '${pid}'}) DETACH DELETE a`);
       await conn.query(`MATCH (s:Session {projectId: '${pid}'}) DETACH DELETE s`);
       const sc = Number(sRows[0]?.["cnt"] ?? 0);
       const mc = Number(mRows[0]?.["cnt"] ?? 0);
-      const ac = Number(aRows[0]?.["cnt"] ?? 0);
-      console.log(`${chalk.red("Removed")} ${sc} session(s), ${mc} memory node(s), ${ac} artifact(s).`);
+      console.log(`${chalk.red("Removed")} ${sc} session(s), ${mc} memory node(s).`);
       return;
     }
 
@@ -1005,9 +1024,89 @@ sessionsCmd
     }
     const sid = String(match["id"]);
     await conn.query(`MATCH (m:Memory {sessionId: '${esc(sid)}'}) DETACH DELETE m`);
-    await conn.query(`MATCH (a:Artifact {sessionId: '${esc(sid)}'}) DETACH DELETE a`);
     await conn.query(`MATCH (s:Session {id: '${esc(sid)}'}) DETACH DELETE s`);
-    console.log(`${chalk.red("Removed")} session ${chalk.dim("[" + shortId(sid) + "]")} and its memories/artifacts.`);
+    console.log(`${chalk.red("Removed")} session ${chalk.dim("[" + sessionShortId(sid) + "]")} and its memories.`);
+  });
+
+// ── Memories ──────────────────────────────────────────────────────────────────
+
+const memoriesCmd = program
+  .command("memories")
+  .description("Browse and manage memory nodes");
+
+memoriesCmd
+  .argument("[id]", "Memory id prefix to view in detail")
+  .option("--session <session>", "Filter by session id prefix")
+  .option("--kind <kind>", "Filter by kind (e.g. decision, fact, learning)")
+  .action(async (id: string | undefined, opts: { session?: string; kind?: string }) => {
+    const { config, conn } = await getProjectDb(process.cwd());
+    const pid = config.projectId;
+
+    // Detail view
+    if (id) {
+      const rows = await queryAll(conn, `MATCH (m:Memory {projectId: '${pid}'}) RETURN m`);
+      const memories = rows.map((r) => r["m"] as Record<string, unknown>);
+      const match = memories.find((m) => String(m["id"]).includes(id));
+      if (!match) {
+        cerr(`No memory matching "${id}". Run: pensive memories`);
+        process.exit(1);
+      }
+      console.log(`\n${chalk.bold.cyan("── Memory ───────────────────────────────")}`);
+      console.log(`  ID:      ${chalk.dim(String(match["id"]))}`);
+      console.log(`  Kind:    ${chalk.white(String(match["kind"] ?? ""))}`);
+      console.log(`  Title:   ${chalk.white(String(match["title"] ?? ""))}`);
+      if (match["summary"]) console.log(`  Summary: ${chalk.dim(String(match["summary"]))}`);
+      if (match["recallCue"]) console.log(`  Cue:     ${chalk.dim(String(match["recallCue"]))}`);
+      if (match["createdAt"]) console.log(`  Created: ${chalk.dim(new Date(String(match["createdAt"])).toLocaleString())}`);
+      if (match["sessionId"]) console.log(`  Session: ${chalk.dim(String(match["sessionId"]))}`);
+
+      console.log("");
+      return;
+    }
+
+    // List view
+    let filters = `WHERE m.projectId = '${pid}'`;
+    if (opts.kind) filters += ` AND m.kind = '${opts.kind}'`;
+    if (opts.session) {
+      const sRows = await queryAll(conn, `MATCH (s:Session {projectId: '${pid}'}) RETURN s`);
+      const sessions = sRows.map((r) => r["s"] as Record<string, unknown>);
+      const sessionMatch = sessions.find((s) => String(s["id"]).includes(opts.session!));
+      if (!sessionMatch) { cerr(`No session matching "${opts.session}".`); process.exit(1); }
+      filters += ` AND m.sessionId = '${String(sessionMatch["id"])}'`;
+    }
+
+    const listRows = await queryAll(conn,
+      `MATCH (m:Memory) ${filters} RETURN m ORDER BY m.createdAt DESC`);
+    if (listRows.length === 0) {
+      console.log(chalk.dim("No memories found."));
+      return;
+    }
+    listRows.forEach((r) => {
+      const m = r["m"] as Record<string, unknown>;
+      const ts = m["createdAt"] ? chalk.dim(new Date(String(m["createdAt"])).toLocaleDateString()) : "";
+      const kind = chalk.dim("[" + String(m["kind"] ?? "").toUpperCase() + "]");
+      console.log(`  ${kind}  ${chalk.white(String(m["title"] ?? ""))}  ${ts}`);
+    });
+  });
+
+memoriesCmd
+  .command("remove <id>")
+  .description("Remove a memory node by id prefix")
+  .action(async (id: string) => {
+    const { config, conn } = await getProjectDb(process.cwd());
+    const pid = config.projectId;
+    const { escape: esc } = await import("./kuzu-helpers.js");
+
+    const rows = await queryAll(conn, `MATCH (m:Memory {projectId: '${pid}'}) RETURN m`);
+    const memories = rows.map((r) => r["m"] as Record<string, unknown>);
+    const match = memories.find((m) => String(m["id"]).includes(id));
+    if (!match) {
+      cerr(`No memory matching "${id}". Run: pensive memories`);
+      process.exit(1);
+    }
+    const mid = String(match["id"]);
+    await conn.query(`MATCH (m:Memory {id: '${esc(mid)}'}) DETACH DELETE m`);
+    console.log(`${chalk.red("Removed")} memory ${chalk.dim(mid.slice(0, 8))}: ${chalk.white(String(match["title"]))}`);
   });
 
 // ─────────────────────────────────────────────────────────────────────────────

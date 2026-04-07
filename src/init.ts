@@ -5,7 +5,7 @@ import { resolveProjectIdentity } from "./detect-project.js";
 import { getDb, applySchema } from "./db.js";
 import { DEFAULT_LLM, DEFAULT_EMBEDDING, type ProjectConfig } from "./config.js";
 
-export async function initProject(cwd: string): Promise<void> {
+export async function initProject(cwd: string): Promise<boolean> {
   // Use cwd directly as the project root — no git required
   const projectRoot = cwd;
   const { remoteUrl, projectName } = resolveProjectIdentity(projectRoot);
@@ -19,7 +19,7 @@ export async function initProject(cwd: string): Promise<void> {
     console.log(`Already initialized: ${existing.projectName}`);
     console.log(`  ID:   ${existing.projectId}`);
     console.log(`  Path: ${repoRoot}`);
-    return;
+    return false;
   }
 
   // Create directory structure
@@ -27,7 +27,6 @@ export async function initProject(cwd: string): Promise<void> {
     projectMemoryDir,
     path.join(projectMemoryDir, "sessions"),
     path.join(projectMemoryDir, "candidates"),
-    path.join(projectMemoryDir, "artifacts"),
     path.join(projectMemoryDir, "summaries"),
     path.join(projectMemoryDir, "queue"),
   ]) {
@@ -85,6 +84,8 @@ export async function initProject(cwd: string): Promise<void> {
   console.log(`  Path:   ${projectMemoryDir}`);
   console.log(`  Hooks:  .claude/settings.json, .github/hooks/pensive.json`);
   console.log(`  Run "pensive config" to set your LLM and embedding models.`);
+
+  return true;
 }
 
 const HOOK_EVENTS: Array<[event: string, type: string]> = [

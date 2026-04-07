@@ -153,7 +153,6 @@ export async function promoteToDb(
         createdAt: '${escape(memory.createdAt)}',
         status: '',
         taskOrder: 0,
-        artifactId: '',
         embedding: ${embeddingLiteral}
       })`
     );

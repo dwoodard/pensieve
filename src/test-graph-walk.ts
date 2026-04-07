@@ -96,7 +96,6 @@ async function insertMemory(
       createdAt: '${opts.createdAt ?? new Date().toISOString()}',
       status: '',
       taskOrder: 0,
-      artifactId: '',
       embedding: ${literal}
     })`
   );

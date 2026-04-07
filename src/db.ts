@@ -57,19 +57,7 @@ export async function applySchema(
       createdAt STRING,
       status STRING,
       taskOrder INT64,
-      artifactId STRING,
       embedding FLOAT[],
-      PRIMARY KEY (id)
-    )`,
-    `CREATE NODE TABLE IF NOT EXISTS Artifact(
-      id STRING,
-      type STRING,
-      title STRING,
-      summary STRING,
-      location STRING,
-      projectId STRING,
-      sessionId STRING,
-      createdAt STRING,
       PRIMARY KEY (id)
     )`,
     `CREATE NODE TABLE IF NOT EXISTS Task(
@@ -85,9 +73,6 @@ export async function applySchema(
     `CREATE REL TABLE IF NOT EXISTS HAS_SESSION(FROM Project TO Session)`,
     `CREATE REL TABLE IF NOT EXISTS HAS_TASK(FROM Project TO Task)`,
     `CREATE REL TABLE IF NOT EXISTS HAS_MEMORY(FROM Session TO Memory)`,
-    `CREATE REL TABLE IF NOT EXISTS PRODUCED(FROM Session TO Artifact)`,
-    `CREATE REL TABLE IF NOT EXISTS REFERS_TO(FROM Memory TO Artifact)`,
-    `CREATE REL TABLE IF NOT EXISTS SUPERSEDES(FROM Memory TO Memory)`,
     `CREATE REL TABLE IF NOT EXISTS RELATED_TO(FROM Memory TO Memory, score FLOAT, createdAt STRING)`,
   ];
 

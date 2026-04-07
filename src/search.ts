@@ -54,7 +54,7 @@ export async function searchMemories(
  * 2. Score all memories: similarity × recency decay
  * 3. Take top seedK hits as entry points
  * 4. Walk up to parent sessions — pull sibling memories (1 hop, half weight)
- * 5. Walk across RELATED_TO / SUPERSEDES edges (1 hop, half weight)
+ * 5. Walk across RELATED_TO edges (1 hop, half weight)
  * 6. Deduplicate, re-rank, return topK
  */
 export async function searchMemoriesWithGraph(
@@ -141,7 +141,7 @@ export async function searchMemoriesWithGraph(
   for (const seed of seeds) {
     const relRows = await queryAll(
       conn,
-      `MATCH (m:Memory {id: '${escape(seed.id)}'})-[:RELATED_TO|SUPERSEDES]->(rel:Memory)
+      `MATCH (m:Memory {id: '${escape(seed.id)}'})-[:RELATED_TO]->(rel:Memory)
        WHERE size(rel.embedding) > 0
        RETURN rel`
     );
