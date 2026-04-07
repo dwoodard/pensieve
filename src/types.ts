@@ -22,6 +22,7 @@ export interface Session {
   startedAt: string;
   title: string;
   summary: string;
+  archived?: boolean;
 }
 
 export interface Memory {

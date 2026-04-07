@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import * as fs from "fs";
 import * as path from "path";
+import chalk from "chalk";
 import * as net from "net";
 import { execSync, spawnSync } from "child_process";
 import { initProject } from "./init.js";
@@ -20,6 +21,8 @@ import { embed } from "./llm.js";
 import { searchMemories } from "./search.js";
 import type { Turn } from "./types.js";
 
+const cerr = (msg: string) => console.error(chalk.red(msg));
+
 const program = new Command();
 
 program
@@ -34,7 +37,7 @@ program
     try {
       await initProject(process.cwd());
     } catch (err) {
-      console.error("Init failed:", err instanceof Error ? err.message : err);
+      console.error(chalk.red("Init failed:"), err instanceof Error ? err.message : err);
       process.exit(1);
     }
   });
@@ -48,12 +51,9 @@ program
       const raw = fs.readFileSync(opts.input, "utf-8");
       const turn: Turn = JSON.parse(raw);
       await ingestTurn(turn);
-      console.log("Turn ingested.");
+      console.log(chalk.green("Turn ingested."));
     } catch (err) {
-      console.error(
-        "Ingest failed:",
-        err instanceof Error ? err.message : err
-      );
+      console.error(chalk.red("Ingest failed:"), err instanceof Error ? err.message : err);
       process.exit(1);
     }
   });
@@ -65,7 +65,7 @@ program
     try {
       const detected = detectProject(process.cwd());
       if (!detected) {
-        console.error("No git repo found.");
+        cerr("No git repo found.");
         process.exit(1);
       }
 
@@ -76,7 +76,7 @@ program
       const configPath = path.join(projectMemoryDir, "config.json");
 
       if (!fs.existsSync(configPath)) {
-        console.error("Not initialized. Run: pensive init");
+        cerr("Not initialized. Run: pensive init");
         process.exit(1);
       }
 
@@ -102,10 +102,7 @@ program
       const output = formatContextBundle(bundle);
       console.log(output);
     } catch (err) {
-      console.error(
-        "Context failed:",
-        err instanceof Error ? err.message : err
-      );
+      console.error(chalk.red("Context failed:"), err instanceof Error ? err.message : err);
       process.exit(1);
     }
   });
@@ -129,11 +126,11 @@ program
     }
 
     const config: ProjectConfig = readProjectConfig(projectMemoryDir);
-    console.log(`── Project ──────────────────────────────`);
-    console.log(`  Name:      ${config.projectName}`);
-    console.log(`  ID:        ${config.projectId}`);
-    console.log(`  Remote:    ${config.remoteUrl}`);
-    console.log(`  Path:      ${projectMemoryDir}`);
+    console.log(chalk.bold.cyan(`── Project ──────────────────────────────`));
+    console.log(`  Name:      ${chalk.white(config.projectName)}`);
+    console.log(`  ID:        ${chalk.dim(config.projectId)}`);
+    console.log(`  Remote:    ${chalk.dim(config.remoteUrl)}`);
+    console.log(`  Path:      ${chalk.dim(projectMemoryDir)}`);
     console.log(`  LLM:       ${config.llm?.provider ?? "not set"} / ${config.llm?.model ?? "not set"}`);
     console.log(`  Embedding: ${config.embedding?.provider ?? "not set"} / ${config.embedding?.model ?? "not set"}`);
 
@@ -150,14 +147,14 @@ program
       const lastTs = lastRows[0]?.["t"];
       const lastActivity = lastTs ? new Date(String(lastTs)).toLocaleString() : "none";
 
-      console.log(`\n── Memory ───────────────────────────────`);
-      console.log(`  Total:     ${totalMemories}`);
+      console.log(chalk.bold.cyan(`\n── Memory ───────────────────────────────`));
+      console.log(`  Total:     ${chalk.white(String(totalMemories))}`);
       if (kindRows.length > 0) {
-        kindRows.forEach((r) => console.log(`  ${String(r["kind"]).padEnd(10)} ${r["cnt"]}`));
+        kindRows.forEach((r) => console.log(`  ${String(r["kind"]).padEnd(10)} ${chalk.dim(String(r["cnt"]))}`));
       }
-      console.log(`\n── Sessions ─────────────────────────────`);
-      console.log(`  Count:     ${sessionCount}`);
-      console.log(`  Last:      ${lastActivity}`);
+      console.log(chalk.bold.cyan(`\n── Sessions ─────────────────────────────`));
+      console.log(`  Count:     ${chalk.white(String(sessionCount))}`);
+      console.log(`  Last:      ${chalk.dim(lastActivity)}`);
     } catch {
       // DB not yet initialized — skip stats
     }
@@ -169,7 +166,7 @@ program
   .option("-k, --top <n>", "Number of results", "5")
   .action(async (query: string, opts) => {
     const detected = detectProject(process.cwd());
-    if (!detected) { console.error("Not in a git repository."); process.exit(1); }
+    if (!detected) { cerr("Not in a git repository."); process.exit(1); }
 
     const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
     const config = readProjectConfig(projectMemoryDir);
@@ -179,15 +176,15 @@ program
     const results = await searchMemories(conn, config.projectId, query, topK);
 
     if (results.length === 0) {
-      console.log("No memories found.");
+      console.log(chalk.dim("No memories found."));
       return;
     }
 
-    console.log(`\nQuery: "${query}"\n`);
+    console.log(`\n${chalk.dim("Query:")} "${chalk.white(query)}"\n`);
 
     for (const m of results) {
-      console.log(`── [${m.kind.toUpperCase()}] ${m.title}  (score: ${m.score.toFixed(4)})`);
-      console.log(`   ${m.summary}`);
+      console.log(`${chalk.bold.cyan("──")} ${chalk.bold("[" + m.kind.toUpperCase() + "]")} ${chalk.white(m.title)}  ${chalk.dim("(score: " + m.score.toFixed(4) + ")")}`);
+      console.log(`   ${chalk.dim(m.summary)}`);
 
       // Parent session
       const sessRows = await queryAll(conn,
@@ -198,8 +195,8 @@ program
         const s = sessRows[0];
         const title = String(s.title || "untitled session");
         const snippet = String(s.summary ?? "").slice(0, 120);
-        console.log(`\n   Session: ${title}`);
-        if (snippet) console.log(`   ${snippet}${s.summary && String(s.summary).length > 120 ? "…" : ""}`);
+        console.log(`\n   ${chalk.bold("Session:")} ${title}`);
+        if (snippet) console.log(`   ${chalk.dim(snippet + (s.summary && String(s.summary).length > 120 ? "…" : ""))}`);
       }
 
       // Sibling memories in same session
@@ -209,8 +206,8 @@ program
          RETURN sib.kind AS kind, sib.title AS title`
       );
       if (siblings.length > 0) {
-        console.log(`\n   Also from this session:`);
-        siblings.forEach((s) => console.log(`     [${s.kind}] ${s.title}`));
+        console.log(`\n   ${chalk.dim("Also from this session:")}`);
+        siblings.forEach((s) => console.log(`     ${chalk.dim("[" + s.kind + "]")} ${s.title}`));
       }
 
       console.log();
@@ -222,7 +219,7 @@ program
   .description("Generate and store embeddings for all Memory nodes that are missing them")
   .action(async () => {
     const detected = detectProject(process.cwd());
-    if (!detected) { console.error("Not in a git repository."); process.exit(1); }
+    if (!detected) { cerr("Not in a git repository."); process.exit(1); }
 
     const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
     const config = readProjectConfig(projectMemoryDir);
@@ -236,11 +233,11 @@ program
     );
 
     if (rows.length === 0) {
-      console.log("All Memory nodes already have embeddings.");
+      console.log(chalk.dim("All Memory nodes already have embeddings."));
       return;
     }
 
-    console.log(`Backfilling ${rows.length} memory node(s)...`);
+    console.log(chalk.cyan(`Backfilling ${rows.length} memory node(s)...`));
     let done = 0, failed = 0;
 
     for (const row of rows) {
@@ -260,7 +257,7 @@ program
       }
     }
 
-    console.log(`\nDone. ${done} embedded, ${failed} failed.`);
+    console.log(`\n${chalk.green("Done.")} ${done} embedded${failed > 0 ? chalk.red(`, ${failed} failed`) : ""}.`);
   });
 
 function findOpenPort(preferred: number): Promise<number> {
@@ -292,7 +289,7 @@ program
 
     const detected = detectProject(process.cwd());
     if (!detected) {
-      console.error("Not in a git repository.");
+      cerr("Not in a git repository.");
       process.exit(1);
     }
 
@@ -300,13 +297,13 @@ program
     const configPath = path.join(projectMemoryDir, "config.json");
 
     if (!fs.existsSync(configPath)) {
-      console.error("Not initialized. Run: pensive init");
+      cerr("Not initialized. Run: pensive init");
       process.exit(1);
     }
 
     const graphDir = path.join(projectMemoryDir, "graph");
     if (!fs.existsSync(graphDir)) {
-      console.error("No Kuzu database found. Ingest a turn first.");
+      cerr("No Kuzu database found. Ingest a turn first.");
       process.exit(1);
     }
 
@@ -325,12 +322,12 @@ program
       "kuzudb/explorer:latest",
     ].join(" ");
 
-    console.log(`Opening Kuzu Explorer for: ${config.projectName}`);
-    console.log(`Database: ${graphDir}`);
-    console.log(`URL:      http://localhost:${port}`);
+    console.log(`${chalk.bold("Opening Kuzu Explorer for:")} ${chalk.white(config.projectName)}`);
+    console.log(`${chalk.dim("Database:")} ${chalk.dim(graphDir)}`);
+    console.log(`${chalk.dim("URL:")}      ${chalk.cyan(`http://localhost:${port}`)}`);
     console.log("");
-    console.log(`Running: ${cmd}`);
-    console.log("Press Ctrl+C to stop.\n");
+    console.log(chalk.dim(`Running: ${cmd}`));
+    console.log(chalk.dim("Press Ctrl+C to stop.\n"));
 
     try {
       execSync(cmd, { stdio: "inherit" });
@@ -348,13 +345,13 @@ program
 
     const detected = detectProject(process.cwd());
     if (!detected) {
-      console.error("Not in a git repository.");
+      cerr("Not in a git repository.");
       process.exit(1);
     }
     const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
     const configPath = path.join(projectMemoryDir, "config.json");
     if (!fs.existsSync(configPath)) {
-      console.error("Not initialized. Run: pensive init");
+      cerr("Not initialized. Run: pensive init");
       process.exit(1);
     }
     const config = readProjectConfig(projectMemoryDir);
@@ -362,7 +359,7 @@ program
     if (opts.set) {
       const [key, value] = opts.set.split("=");
       if (!key || value === undefined) {
-        console.error("Usage: --set llm.provider=ollama");
+        cerr("Usage: --set llm.provider=ollama");
         process.exit(1);
       }
       const parts = key.split(".");
@@ -371,14 +368,14 @@ program
       for (let i = 0; i < parts.length - 1; i++) obj = obj[parts[i]];
       obj[parts[parts.length - 1]] = value;
       writeProjectConfig(projectMemoryDir, config);
-      console.log(`Set ${key} = ${value}`);
+      console.log(`${chalk.green("Set")} ${chalk.white(key)} = ${value}`);
       return;
     }
 
     // Interactive mode
-    console.log("\nCurrent config:");
-    console.log(`  LLM:       ${config.llm?.provider ?? "not set"} / ${config.llm?.model ?? "not set"}`);
-    console.log(`  Embedding: ${config.embedding?.provider ?? "not set"} / ${config.embedding?.model ?? "not set"}\n`);
+    console.log(chalk.bold("\nCurrent config:"));
+    console.log(`  LLM:       ${chalk.white(config.llm?.provider ?? "not set")} / ${chalk.dim(config.llm?.model ?? "not set")}`);
+    console.log(`  Embedding: ${chalk.white(config.embedding?.provider ?? "not set")} / ${chalk.dim(config.embedding?.model ?? "not set")}\n`);
 
     const providerChoices = [
       { name: "LM Studio  (local, free)", value: "lmstudio" },
@@ -425,7 +422,7 @@ program
     }
 
     // --- LLM ---
-    console.log("── LLM (used for memory extraction) ────");
+    console.log(chalk.bold.cyan("── LLM (used for memory extraction) ────"));
     const llmProvider = await select({ message: "LLM provider:", choices: providerChoices, default: config.llm.provider });
     const llmDefaults = PROVIDER_DEFAULTS[llmProvider];
     const llmBaseUrl = await input({ message: "LLM base URL:", default: llmDefaults.baseUrl ?? config.llm.baseUrl });
@@ -435,7 +432,7 @@ program
     if (!isLlmLocal) llmApiKey = await input({ message: "LLM API Key:", default: config.llm.apiKey || "" });
 
     // --- Embedding ---
-    console.log("\n── Embedding (used for vector search) ──");
+    console.log(chalk.bold.cyan("\n── Embedding (used for vector search) ──"));
     const embProvider = await select({ message: "Embedding provider:", choices: providerChoices, default: config.embedding.provider });
     const embDefaults = PROVIDER_DEFAULTS[embProvider];
     const embBaseUrl = await input({ message: "Embedding base URL:", default: embDefaults.baseUrl ?? config.embedding.baseUrl });
@@ -448,9 +445,9 @@ program
     config.embedding = { provider: embProvider, model: embModel, baseUrl: embBaseUrl, apiKey: embApiKey };
     writeProjectConfig(projectMemoryDir, config);
 
-    console.log(`\nSaved to .pensive/config.json`);
-    console.log(`  LLM:       ${llmProvider} / ${llmModel}`);
-    console.log(`  Embedding: ${embProvider} / ${embModel}`);
+    console.log(`\n${chalk.green("Saved to")} ${chalk.dim(".pensive/config.json")}`);
+    console.log(`  LLM:       ${chalk.white(llmProvider)} / ${chalk.dim(llmModel)}`);
+    console.log(`  Embedding: ${chalk.white(embProvider)} / ${chalk.dim(embModel)}`);
   });
 
 // ── Tasks ────────────────────────────────────────────────────────────────────
@@ -458,13 +455,13 @@ program
 async function getProjectDb(cwd: string) {
   const detected = detectProject(cwd);
   if (!detected) {
-    console.error("Not in a git repository.");
+    cerr("Not in a git repository.");
     process.exit(1);
   }
   const projectMemoryDir = path.join(detected.repoRoot, ".pensive");
   const configPath = path.join(projectMemoryDir, "config.json");
   if (!fs.existsSync(configPath)) {
-    console.error("Not initialized. Run: pensive init");
+    cerr("Not initialized. Run: pensive init");
     process.exit(1);
   }
   const config = readProjectConfig(projectMemoryDir);
@@ -489,29 +486,29 @@ function printTaskList(
   }
 
   if (active) {
-    console.log(`\n● ACTIVE [${shortId(String(active["id"]))}]   ${active["title"]}`);
-    if (active["summary"]) console.log(`                      ${active["summary"]}`);
+    console.log(`\n${chalk.green("●")} ${chalk.bold.green("ACTIVE")} ${chalk.dim("[" + shortId(String(active["id"])) + "]")}   ${chalk.bold.green(String(active["title"]))}`);
+    if (active["summary"]) console.log(`                      ${chalk.dim(String(active["summary"]))}`);
   } else {
-    console.log("\n  (no active task)");
+    console.log(chalk.dim("\n  (no active task)"));
   }
 
   if (pending.length > 0) {
-    console.log("\n  QUEUE");
+    console.log(chalk.bold("\n  QUEUE"));
     pending.forEach((t, i) =>
-      console.log(`  ${String(i + 1).padStart(2)}  [${shortId(String(t["id"]))}]  ${t["title"]}`)
+      console.log(`  ${chalk.dim(String(i + 1).padStart(2))}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${t["title"]}`)
     );
   }
 
   if (blocked.length > 0) {
-    console.log("\n  BLOCKED");
+    console.log(chalk.bold.yellow("\n  BLOCKED"));
     blocked.forEach((t) =>
-      console.log(`  ✗  [${shortId(String(t["id"]))}]  ${t["title"]}`)
+      console.log(`  ${chalk.yellow("✗")}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${chalk.yellow(String(t["title"]))}`)
     );
   }
 
   if (done.length > 0) {
-    console.log("\n  DONE");
-    done.forEach((t) => console.log(`  ✓  ${t["title"]}`));
+    console.log(chalk.dim("\n  DONE"));
+    done.forEach((t) => console.log(chalk.dim(`  ✓  ${t["title"]}`)));
   }
 
   console.log("");
@@ -546,11 +543,12 @@ tasksCmd
         .map((r) => r["t"] as Record<string, unknown>)
         .sort((a, b) => statusOrder.indexOf(String(a["status"])) - statusOrder.indexOf(String(b["status"])));
       if (all.length === 0) {
-        console.log("No tasks.");
+        console.log(chalk.dim("No tasks."));
       } else {
-        all.forEach((t) =>
-          console.log(`  [${shortId(String(t["id"]))}]  ${String(t["status"]).padEnd(8)}  ${t["title"]}`)
-        );
+        all.forEach((t) => {
+          const statusColor = t["status"] === "active" ? chalk.green : t["status"] === "blocked" ? chalk.yellow : t["status"] === "done" ? chalk.dim : chalk.white;
+          console.log(`  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${statusColor(String(t["status"]).padEnd(8))}  ${t["title"]}`);
+        });
       }
       return;
     }
@@ -601,7 +599,7 @@ tasksCmd
        CREATE (p)-[:HAS_TASK]->(t)`
     );
 
-    console.log(`Added: ${title}  [${shortId(id)}]`);
+    console.log(`${chalk.green("Added:")} ${title}  ${chalk.dim("[" + shortId(id) + "]")}`);
   });
 
 tasksCmd
@@ -627,7 +625,7 @@ tasksCmd
     }
 
     if (!target_id) {
-      console.error(`No pending task matching "${target}". Run: pensive tasks`);
+      cerr(`No pending task matching "${target}". Run: pensive tasks`);
       process.exit(1);
     }
 
@@ -645,7 +643,7 @@ tasksCmd
     );
 
     const title = pending.find((t) => String(t["id"]) === target_id)?.["title"];
-    console.log(`Active: ${title}`);
+    console.log(`${chalk.green("Active:")} ${title}`);
   });
 
 tasksCmd
@@ -660,10 +658,10 @@ tasksCmd
       const rows = await queryAll(conn,
         `MATCH (m:Task {projectId: '${pid}', status: 'active'})
          RETURN m LIMIT 1`);
-      if (rows.length === 0) { console.log("No active task."); return; }
+      if (rows.length === 0) { console.log(chalk.dim("No active task.")); return; }
       const task = rows[0]["m"] as Record<string, unknown>;
       await conn.query(`MATCH (m:Task {id: '${esc(String(task["id"]))}' }) SET m.status = 'done'`);
-      console.log(`Done: ${task["title"]}`);
+      console.log(`${chalk.green("Done:")} ${task["title"]}`);
       return;
     }
 
@@ -681,9 +679,9 @@ tasksCmd
       } else {
         task = all.find((t) => shortId(String(t["id"])).startsWith(target));
       }
-      if (!task) { console.error(`No task matching "${target}"`); continue; }
+      if (!task) { cerr(`No task matching "${target}"`); continue; }
       await conn.query(`MATCH (m:Task {id: '${esc(String(task["id"]))}' }) SET m.status = 'done'`);
-      console.log(`Done: ${task["title"]}`);
+      console.log(`${chalk.green("Done:")} ${task["title"]}`);
     }
   });
 
@@ -698,7 +696,7 @@ tasksCmd
       `MATCH (m:Task {projectId: '${pid}', status: 'active'})
        RETURN m LIMIT 1`);
     if (rows.length === 0) {
-      console.log("No active task.");
+      console.log(chalk.dim("No active task."));
       return;
     }
 
@@ -709,8 +707,8 @@ tasksCmd
       `MATCH (m:Task {id: '${esc(String(task["id"]))}' })
        SET m.status = 'blocked', m.summary = '${esc(newSummary)}'`
     );
-    console.log(`Blocked: ${task["title"]}`);
-    console.log(`Reason:  ${reason}`);
+    console.log(`${chalk.yellow("Blocked:")} ${task["title"]}`);
+    console.log(`${chalk.dim("Reason:")}  ${reason}`);
   });
 
 tasksCmd
@@ -725,16 +723,16 @@ tasksCmd
     if (opts.all) {
       const { confirm } = await import("@inquirer/prompts");
       const ok = await confirm({ message: "Remove all tasks for this project?", default: false });
-      if (!ok) { console.log("Cancelled."); return; }
+      if (!ok) { console.log(chalk.dim("Cancelled.")); return; }
       const rows = await queryAll(conn, `MATCH (t:Task {projectId: '${pid}'}) RETURN count(t) AS cnt`);
       const cnt = Number(rows[0]?.["cnt"] ?? 0);
       await conn.query(`MATCH (t:Task {projectId: '${pid}'}) DETACH DELETE t`);
-      console.log(`Removed ${cnt} task(s).`);
+      console.log(`${chalk.red("Removed")} ${cnt} task(s).`);
       return;
     }
 
     if (!target) {
-      console.error("Specify a task position or id, or use --all.");
+      cerr("Specify a task position or id, or use --all.");
       process.exit(1);
     }
 
@@ -754,13 +752,13 @@ tasksCmd
     }
 
     if (!targetId) {
-      console.error(`No task matching "${target}". Run: pensive tasks`);
+      cerr(`No task matching "${target}". Run: pensive tasks`);
       process.exit(1);
     }
 
     const task = all.find((t) => String(t["id"]) === targetId);
     await conn.query(`MATCH (t:Task {id: '${esc(targetId)}'}) DETACH DELETE t`);
-    console.log(`Removed: ${task?.["title"]}`);
+    console.log(`${chalk.red("Removed:")} ${task?.["title"]}`);
   });
 
 tasksCmd
@@ -779,7 +777,7 @@ tasksCmd
     const to = parseInt(toStr, 10);
 
     if (isNaN(from) || isNaN(to) || from < 1 || to < 1 || from > pending.length || to > pending.length) {
-      console.error(`Positions must be between 1 and ${pending.length}`);
+      cerr(`Positions must be between 1 and ${pending.length}`);
       process.exit(1);
     }
 
@@ -794,9 +792,9 @@ tasksCmd
       );
     }
 
-    console.log("Queue reordered:");
+    console.log(chalk.bold("Queue reordered:"));
     pending.forEach((t, i) =>
-      console.log(`  ${i + 1}  ${t["title"]}`)
+      console.log(`  ${chalk.dim(String(i + 1))}  ${t["title"]}`)
     );
   });
 
@@ -807,22 +805,60 @@ const sessionsCmd = program
   .description("Manage project sessions");
 
 sessionsCmd
-  .action(async () => {
+  .option("--all", "Show archived sessions too")
+  .action(async (opts: { all?: boolean }) => {
     const { config, conn } = await getProjectDb(process.cwd());
     const pid = config.projectId;
+    const filter = opts.all ? "" : " AND (s.archived = false OR s.archived IS NULL)";
     const rows = await queryAll(conn,
       `MATCH (s:Session {projectId: '${pid}'})
+       WHERE true${filter}
        RETURN s ORDER BY s.startedAt DESC`);
     if (rows.length === 0) {
-      console.log("No sessions.");
+      console.log(opts.all ? "No sessions." : "No active sessions. Use --all to include archived.");
       return;
     }
     rows.forEach((r) => {
       const s = r["s"] as Record<string, unknown>;
       const ts = s["startedAt"] ? new Date(String(s["startedAt"])).toLocaleString() : "unknown";
       const title = s["title"] ? `  ${s["title"]}` : "";
-      console.log(`  [${shortId(String(s["id"]))}]  ${ts}${title}`);
+      const archived = s["archived"] ? chalk.dim("  [archived]") : "";
+      console.log(`  ${chalk.dim("[" + shortId(String(s["id"])) + "]")}  ${chalk.dim(ts)}${chalk.white(title)}${archived}`);
     });
+  });
+
+sessionsCmd
+  .command("archive [target]")
+  .description("Archive a session by id prefix; --all archives every session for this project")
+  .option("--all", "Archive all sessions for this project")
+  .action(async (target: string | undefined, opts: { all?: boolean }) => {
+    const { config, conn } = await getProjectDb(process.cwd());
+    const pid = config.projectId;
+    const { escape: esc } = await import("./kuzu-helpers.js");
+
+    if (opts.all) {
+      const sRows = await queryAll(conn, `MATCH (s:Session {projectId: '${pid}'}) RETURN count(s) AS cnt`);
+      await conn.query(`MATCH (s:Session {projectId: '${pid}'}) SET s.archived = true`);
+      const sc = Number(sRows[0]?.["cnt"] ?? 0);
+      console.log(`${chalk.green("Archived")} ${sc} session(s).`);
+      return;
+    }
+
+    if (!target) {
+      cerr("Specify a session id prefix, or use --all.");
+      process.exit(1);
+    }
+
+    const rows = await queryAll(conn, `MATCH (s:Session {projectId: '${pid}'}) RETURN s`);
+    const sessions = rows.map((r) => r["s"] as Record<string, unknown>);
+    const match = sessions.find((s) => String(s["id"]).includes(target));
+    if (!match) {
+      cerr(`No session matching "${target}". Run: pensive sessions --all`);
+      process.exit(1);
+    }
+    const sid = String(match["id"]);
+    await conn.query(`MATCH (s:Session {id: '${esc(sid)}'}) SET s.archived = true`);
+    console.log(`${chalk.green("Archived")} session ${chalk.dim("[" + shortId(sid) + "]")}.`);
   });
 
 sessionsCmd
@@ -837,7 +873,7 @@ sessionsCmd
     if (opts.all) {
       const { confirm } = await import("@inquirer/prompts");
       const ok = await confirm({ message: "Remove all sessions, memories, and artifacts for this project?", default: false });
-      if (!ok) { console.log("Cancelled."); return; }
+      if (!ok) { console.log(chalk.dim("Cancelled.")); return; }
       const mRows = await queryAll(conn, `MATCH (m:Memory {projectId: '${pid}'}) RETURN count(m) AS cnt`);
       const aRows = await queryAll(conn, `MATCH (a:Artifact {projectId: '${pid}'}) RETURN count(a) AS cnt`);
       const sRows = await queryAll(conn, `MATCH (s:Session {projectId: '${pid}'}) RETURN count(s) AS cnt`);
@@ -847,12 +883,12 @@ sessionsCmd
       const sc = Number(sRows[0]?.["cnt"] ?? 0);
       const mc = Number(mRows[0]?.["cnt"] ?? 0);
       const ac = Number(aRows[0]?.["cnt"] ?? 0);
-      console.log(`Removed ${sc} session(s), ${mc} memory node(s), ${ac} artifact(s).`);
+      console.log(`${chalk.red("Removed")} ${sc} session(s), ${mc} memory node(s), ${ac} artifact(s).`);
       return;
     }
 
     if (!target) {
-      console.error("Specify a session id prefix, or use --all.");
+      cerr("Specify a session id prefix, or use --all.");
       process.exit(1);
     }
 
@@ -861,14 +897,14 @@ sessionsCmd
     const sessions = rows.map((r) => r["s"] as Record<string, unknown>);
     const match = sessions.find((s) => String(s["id"]).includes(target));
     if (!match) {
-      console.error(`No session matching "${target}". Run: pensive sessions`);
+      cerr(`No session matching "${target}". Run: pensive sessions`);
       process.exit(1);
     }
     const sid = String(match["id"]);
     await conn.query(`MATCH (m:Memory {sessionId: '${esc(sid)}'}) DETACH DELETE m`);
     await conn.query(`MATCH (a:Artifact {sessionId: '${esc(sid)}'}) DETACH DELETE a`);
     await conn.query(`MATCH (s:Session {id: '${esc(sid)}'}) DETACH DELETE s`);
-    console.log(`Removed session [${shortId(sid)}] and its memories/artifacts.`);
+    console.log(`${chalk.red("Removed")} session ${chalk.dim("[" + shortId(sid) + "]")} and its memories/artifacts.`);
   });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -886,19 +922,19 @@ program
   .description("Run a Claude Code hook (reads JSON payload from stdin)")
   .action((type: string | undefined) => {
     if (!type) {
-      console.log("Usage: pensive hook <type>\n");
-      console.log("Available hook types:");
+      console.log(`${chalk.bold("Usage:")} pensive hook <type>\n`);
+      console.log(chalk.bold("Available hook types:"));
       for (const [name, script] of Object.entries(HOOK_SCRIPTS)) {
-        console.log(`  ${name.padEnd(16)} (${script})`);
+        console.log(`  ${chalk.white(name.padEnd(16))} ${chalk.dim("(" + script + ")")}`);
       }
-      console.log("\nThese are registered automatically in .claude/settings.json and .github/settings.json");
-      console.log("by running: pensive init");
+      console.log(chalk.dim("\nThese are registered automatically in .claude/settings.json and .github/settings.json"));
+      console.log(chalk.dim("by running: pensive init"));
       process.exit(0);
     }
     const script = HOOK_SCRIPTS[type];
     if (!script) {
-      console.error(`Unknown hook type: ${type}`);
-      console.error(`Valid types: ${Object.keys(HOOK_SCRIPTS).join(", ")}`);
+      cerr(`Unknown hook type: ${type}`);
+      cerr(`Valid types: ${Object.keys(HOOK_SCRIPTS).join(", ")}`);
       process.exit(1);
     }
     const scriptPath = path.join(__dirname, script);

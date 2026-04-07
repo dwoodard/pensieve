@@ -134,10 +134,10 @@ async function main(): Promise<void> {
       `MATCH (t:Task {projectId: '${pid}', status: 'pending'})
        RETURN t ORDER BY t.taskOrder ASC LIMIT 3`
     );
-    // Most recent session for this project, excluding the current one
+    // Most recent non-archived session for this project, excluding the current one
     const lastSessionRows = await queryAll(conn,
       `MATCH (s:Session {projectId: '${pid}'})
-       WHERE s.id <> '${escape(currentSessionId)}'
+       WHERE s.id <> '${escape(currentSessionId)}' AND (s.archived = false OR s.archived IS NULL)
        RETURN s ORDER BY s.startedAt DESC LIMIT 1`
     );
 
