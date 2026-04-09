@@ -12,7 +12,7 @@ import { readAllCandidates, reviewCandidates, clearCandidates, summarizeSession 
 import { promoteToDb, getExistingMemories } from "./promote-memory.js";
 import { readProjectConfig } from "./config.js";
 import { getDb } from "./db.js";
-import { readSummary } from "./update-summary.js";
+import { readSessionTurns } from "./update-summary.js";
 import { escape } from "./kuzu-helpers.js";
 
 interface CompactPayload {
@@ -48,7 +48,7 @@ async function main(): Promise<void> {
     const sessionId = payload.session_id;
 
     // Generate a meaningful title and summary for this session
-    const rawLog = readSummary(projectMemoryDir, sessionId);
+    const rawLog = readSessionTurns(projectMemoryDir, sessionId);
     if (rawLog) {
       try {
         const { title, summary } = await summarizeSession(rawLog, config.projectName);

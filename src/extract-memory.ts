@@ -226,7 +226,7 @@ export async function summarizeSession(
   projectName: string
 ): Promise<{ title: string; summary: string }> {
   if (!rawLog.trim()) return { title: "", summary: "" };
-  const truncatedLog = rawLog.length > 4000 ? rawLog.slice(0, 4000) + "\n...[truncated]" : rawLog;
+  const truncatedLog = rawLog.length > 8000 ? rawLog.slice(0, 8000) + "\n...[truncated]" : rawLog;
   const prompt = SESSION_SUMMARY_PROMPT
     .replace("{PROJECT_NAME}", projectName)
     .replace("{SESSION_LOG}", truncatedLog);

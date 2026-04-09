@@ -3,8 +3,8 @@ import { detectProject } from "./detect-project.js";
 import { getDb } from "./db.js";
 import { queryAll, escape } from "./kuzu-helpers.js";
 import { appendTurn, resolveSession } from "./append-turn.js";
-import { readSummary, writeSummary, buildUpdatedSummary } from "./update-summary.js";
-import { extractFromTurn, writeCandidateFile } from "./extract-memory.js";
+import { readSummary, writeSummary, buildUpdatedSummary, readSessionTurns } from "./update-summary.js";
+import { extractFromTurn, writeCandidateFile, summarizeSession } from "./extract-memory.js";
 import { promoteToDb } from "./promote-memory.js";
 import { readProjectConfig } from "./config.js";
 import { embed } from "./llm.js";
@@ -86,6 +86,19 @@ export async function ingestTurn(turn: Turn): Promise<void> {
 
   // 4. Extract memories from the full turn (skip if LLM not configured)
   if (!config.llm?.model || config.llm.model === "local-model") return;
+
+  // 4a. Update session title/summary using the full session log (fire and forget)
+  const fullLog = readSessionTurns(projectMemoryDir, sessionId);
+  if (fullLog) {
+    summarizeSession(fullLog, config.projectName).then(({ title, summary }) => {
+      if (title) {
+        conn.query(
+          `MATCH (s:Session {id: '${escape(sessionId)}'})
+           SET s.title = '${escape(title)}', s.summary = '${escape(summary)}'`
+        ).catch(() => {});
+      }
+    }).catch(() => {});
+  }
 
   const assistantText = turn.messages.find((m) => m.role === "assistant")?.content ?? "";
   if (!userText) return;
