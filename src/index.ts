@@ -7,6 +7,7 @@ import { readSummary, writeSummary, buildUpdatedSummary } from "./update-summary
 import { extractFromTurn, writeCandidateFile } from "./extract-memory.js";
 import { promoteToDb } from "./promote-memory.js";
 import { readProjectConfig } from "./config.js";
+import { embed } from "./llm.js";
 import type { Turn } from "./types.js";
 
 export async function ingestTurn(turn: Turn): Promise<void> {
@@ -63,6 +64,12 @@ export async function ingestTurn(turn: Turn): Promise<void> {
       `MATCH (p:Project {id: '${escape(config.projectId)}'}), (s:Session {id: '${escape(sessionId)}'})
        CREATE (p)-[:HAS_SESSION]->(s)`
     );
+
+    // Best-effort embedding of session title
+    embed(title).then((vec) => {
+      const literal = `[${vec.join(", ")}]`;
+      conn.query(`MATCH (s:Session {id: '${escape(sessionId)}'}) SET s.embedding = ${literal}`).catch(() => {});
+    }).catch(() => {});
   }
 
   // 2. Append turn to session log

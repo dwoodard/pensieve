@@ -24,6 +24,7 @@ export interface Session {
   title: string;
   summary: string;
   archived?: boolean;
+  embedding?: number[];
 }
 
 export interface Memory {
@@ -47,6 +48,7 @@ export interface Task {
   projectId: string;
   createdAt: string;
   parentId?: string;
+  embedding?: number[];
 }
 
 export interface Turn {

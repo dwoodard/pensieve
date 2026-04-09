@@ -44,6 +44,7 @@ export async function applySchema(
       startedAt STRING,
       title STRING,
       summary STRING,
+      embedding FLOAT[],
       PRIMARY KEY (id)
     )`,
     `CREATE NODE TABLE IF NOT EXISTS Memory(
@@ -68,6 +69,7 @@ export async function applySchema(
       taskOrder INT64,
       projectId STRING,
       createdAt STRING,
+      embedding FLOAT[],
       PRIMARY KEY (id)
     )`,
     `CREATE REL TABLE IF NOT EXISTS HAS_SESSION(FROM Project TO Session)`,
@@ -134,6 +136,8 @@ export async function applySchema(
   try { await conn.query(`ALTER TABLE Session ADD title STRING DEFAULT ''`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Session ADD archived BOOLEAN DEFAULT false`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Memory ADD embedding FLOAT[] DEFAULT []`); } catch { /* exists */ }
+  try { await conn.query(`ALTER TABLE Task ADD embedding FLOAT[] DEFAULT []`); } catch { /* exists */ }
+  try { await conn.query(`ALTER TABLE Session ADD embedding FLOAT[] DEFAULT []`); } catch { /* exists */ }
 
   // Migration: recreate RELATED_TO with score + createdAt properties
   try {

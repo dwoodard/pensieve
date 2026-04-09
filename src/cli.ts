@@ -19,7 +19,7 @@ import {
 } from "./config.js";
 import { embed, llmChatMessages } from "./llm.js";
 import type { ChatMessage, ToolDefinition } from "./llm.js";
-import { searchMemories, searchMemoriesWithGraph } from "./search.js";
+import { searchAll, searchMemoriesWithGraph } from "./search.js";
 import type { Turn } from "./types.js";
 
 const cerr = (msg: string) => console.error(chalk.red(msg));
@@ -250,7 +250,7 @@ program
 
 program
   .command("search <query>")
-  .description("Semantic search across memories, with graph context")
+  .description("Semantic search across memories, tasks, and sessions")
   .option("-k, --top <n>", "Number of results", "5")
   .action(async (query: string, opts) => {
     const detected = detectProject(process.cwd());
@@ -259,52 +259,44 @@ program
     const projectMemoryDir = path.join(detected.projectRoot, ".pensive");
     const config = readProjectConfig(projectMemoryDir);
     const { conn } = getDb(projectMemoryDir);
+    await applySchema(conn);
 
     const topK = parseInt(opts.top ?? "5", 10);
-    const results = await searchMemories(conn, config.projectId, query, topK);
+    const results = await searchAll(conn, config.projectId, query, topK);
 
     if (results.length === 0) {
-      console.log(chalk.dim("No memories found."));
+      console.log(chalk.dim("No results found."));
       return;
     }
 
     console.log(`\n${chalk.dim("Query:")} "${chalk.white(query)}"\n`);
 
-    for (const m of results) {
-      console.log(`${chalk.bold.cyan("──")} ${chalk.bold("[" + m.kind.toUpperCase() + "]")} ${chalk.white(m.title)}  ${chalk.dim("(score: " + m.score.toFixed(4) + ")")}`);
-      console.log(`   ${chalk.dim(m.summary)}`);
-
-      // Parent session
-      const sessRows = await queryAll(conn,
-        `MATCH (s:Session)-[:HAS_MEMORY]->(m:Memory {id: '${m.id}'})
-         RETURN s.title AS title, s.summary AS summary`
-      );
-      if (sessRows.length > 0) {
-        const s = sessRows[0];
-        const title = String(s.title || "untitled session");
-        const snippet = String(s.summary ?? "").slice(0, 120);
-        console.log(`\n   ${chalk.bold("Session:")} ${title}`);
-        if (snippet) console.log(`   ${chalk.dim(snippet + (s.summary && String(s.summary).length > 120 ? "…" : ""))}`);
+    for (const r of results) {
+      if (r.nodeType === "memory") {
+        console.log(`${chalk.bold.cyan("──")} ${chalk.bold("[" + (r.kind ?? "memory").toUpperCase() + "]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
+        if (r.summary) console.log(`   ${chalk.dim(r.summary)}`);
+        if (r.sessionId) {
+          const sessRows = await queryAll(conn,
+            `MATCH (s:Session)-[:HAS_MEMORY]->(m:Memory {id: '${r.id}'})
+             RETURN s.title AS title`
+          );
+          if (sessRows.length > 0) console.log(`   ${chalk.dim("session:")} ${sessRows[0]["title"] ?? ""}`);
+        }
+      } else if (r.nodeType === "task") {
+        const statusColor = r.status === "active" ? chalk.green : r.status === "blocked" ? chalk.yellow : r.status === "done" ? chalk.dim : chalk.white;
+        console.log(`${chalk.bold.cyan("──")} ${chalk.bold("[TASK]")} ${chalk.white(r.title)}  ${statusColor(r.status ?? "")}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
+        if (r.summary) console.log(`   ${chalk.dim(r.summary)}`);
+      } else {
+        console.log(`${chalk.bold.cyan("──")} ${chalk.bold("[SESSION]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
+        if (r.summary) console.log(`   ${chalk.dim(r.summary.slice(0, 120) + (r.summary.length > 120 ? "…" : ""))}`);
       }
-
-      // Sibling memories in same session
-      const siblings = await queryAll(conn,
-        `MATCH (s:Session {id: '${m.sessionId}'})-[:HAS_MEMORY]->(sib:Memory)
-         WHERE sib.id <> '${m.id}'
-         RETURN sib.kind AS kind, sib.title AS title`
-      );
-      if (siblings.length > 0) {
-        console.log(`\n   ${chalk.dim("Also from this session:")}`);
-        siblings.forEach((s) => console.log(`     ${chalk.dim("[" + s.kind + "]")} ${s.title}`));
-      }
-
       console.log();
     }
   });
 
 program
   .command("backfill-embeddings")
-  .description("Generate and store embeddings for all Memory nodes that are missing them")
+  .description("Generate and store embeddings for all nodes missing them (Memory, Task, Session)")
   .action(async () => {
     const detected = detectProject(process.cwd());
     if (!detected) { cerr("No pensive project found. Run: pensive init"); process.exit(1); }
@@ -312,34 +304,56 @@ program
     const projectMemoryDir = path.join(detected.projectRoot, ".pensive");
     const config = readProjectConfig(projectMemoryDir);
     const { conn } = getDb(projectMemoryDir);
+    await applySchema(conn);
+    const pid = config.projectId;
 
-    const rows = await queryAll(
-      conn,
-      `MATCH (m:Memory {projectId: '${config.projectId}'})
-       WHERE m.embedding IS NULL OR size(m.embedding) = 0
+    type BackfillRow = { id: string; text: string; setQuery: (id: string, literal: string) => string };
+
+    const memRows = (await queryAll(conn,
+      `MATCH (m:Memory {projectId: '${pid}'}) WHERE m.embedding IS NULL OR size(m.embedding) = 0
        RETURN m.id AS id, m.title AS title, m.summary AS summary`
-    );
+    )).map((r): BackfillRow => ({
+      id: String(r["id"]),
+      text: `${r["title"]}. ${r["summary"]}`,
+      setQuery: (id, lit) => `MATCH (m:Memory {id: '${id}'}) SET m.embedding = ${lit}`,
+    }));
+
+    const taskRows = (await queryAll(conn,
+      `MATCH (t:Task {projectId: '${pid}'}) WHERE t.embedding IS NULL OR size(t.embedding) = 0
+       RETURN t.id AS id, t.title AS title, t.summary AS summary`
+    )).map((r): BackfillRow => ({
+      id: String(r["id"]),
+      text: `${r["title"]}. ${r["summary"]}`,
+      setQuery: (id, lit) => `MATCH (t:Task {id: '${id}'}) SET t.embedding = ${lit}`,
+    }));
+
+    const sessionRows = (await queryAll(conn,
+      `MATCH (s:Session {projectId: '${pid}'}) WHERE s.embedding IS NULL OR size(s.embedding) = 0
+       RETURN s.id AS id, s.title AS title, s.summary AS summary`
+    )).map((r): BackfillRow => ({
+      id: String(r["id"]),
+      text: `${r["title"]}. ${r["summary"]}`,
+      setQuery: (id, lit) => `MATCH (s:Session {id: '${id}'}) SET s.embedding = ${lit}`,
+    }));
+
+    const rows = [...memRows, ...taskRows, ...sessionRows];
 
     if (rows.length === 0) {
-      console.log(chalk.dim("All Memory nodes already have embeddings."));
+      console.log(chalk.dim("All nodes already have embeddings."));
       return;
     }
 
-    console.log(chalk.cyan(`Backfilling ${rows.length} memory node(s)...`));
+    console.log(chalk.cyan(`Backfilling ${rows.length} node(s) (${memRows.length} memories, ${taskRows.length} tasks, ${sessionRows.length} sessions)...`));
     let done = 0, failed = 0;
 
     for (const row of rows) {
-      const id = String(row["id"]);
-      const text = `${row["title"]}. ${row["summary"]}`;
       try {
-        const embedding = await embed(text);
+        const embedding = await embed(row.text);
         const literal = `[${embedding.join(", ")}]`;
-        await conn.query(
-          `MATCH (m:Memory {id: '${id}'}) SET m.embedding = ${literal}`
-        );
+        await conn.query(row.setQuery(row.id, literal));
         done++;
         process.stdout.write(`\r  ${done}/${rows.length} embedded, ${failed} failed`);
-      } catch (err) {
+      } catch {
         failed++;
         process.stdout.write(`\r  ${done}/${rows.length} embedded, ${failed} failed`);
       }
@@ -746,6 +760,12 @@ tasksCmd
        CREATE (p)-[:HAS_TASK]->(t)`
     );
 
+    // Best-effort embedding
+    embed(title).then((vec) => {
+      const literal = `[${vec.join(", ")}]`;
+      conn.query(`MATCH (t:Task {id: '${esc(id)}'}) SET t.embedding = ${literal}`).catch(() => {});
+    }).catch(() => {});
+
     if (parentId) {
       const parentRows = await queryAll(conn, `MATCH (t:Task {id: '${esc(parentId)}'}) RETURN t`);
       const parentTitle = (parentRows[0]?.["t"] as Record<string, unknown>)?.["title"] ?? parentId;
@@ -786,6 +806,11 @@ tasksCmd
 
     await conn.query(`MATCH (t:Task {id: '${esc(targetId)}'}) SET t.summary = '${esc(text)}'`);
     const task = all.find((t) => String(t["id"]) === targetId);
+    const embedText = `${task?.["title"] ?? ""}. ${text}`;
+    embed(embedText).then((vec) => {
+      const literal = `[${vec.join(", ")}]`;
+      conn.query(`MATCH (t:Task {id: '${esc(targetId)}'}) SET t.embedding = ${literal}`).catch(() => {});
+    }).catch(() => {});
     console.log(`${chalk.green("Summary set:")} ${task?.["title"]}  ${chalk.dim("- " + text)}`);
   });
 
@@ -818,6 +843,10 @@ tasksCmd
     }
 
     await conn.query(`MATCH (t:Task {id: '${esc(targetId)}'}) SET t.title = '${esc(text)}'`);
+    embed(text).then((vec) => {
+      const literal = `[${vec.join(", ")}]`;
+      conn.query(`MATCH (t:Task {id: '${esc(targetId)}'}) SET t.embedding = ${literal}`).catch(() => {});
+    }).catch(() => {});
     console.log(`${chalk.green("Updated:")} ${text}  ${chalk.dim("[" + shortId(targetId) + "]")}`);
   });
 

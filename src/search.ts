@@ -1,9 +1,29 @@
 import { embed } from "./llm.js";
 import { queryAll, escape } from "./kuzu-helpers.js";
-import type { Memory, ScoredMemory } from "./types.js";
+import type { Memory, Task, Session, ScoredMemory } from "./types.js";
 import type kuzu from "kuzu";
 
 export { ScoredMemory };
+
+export interface ScoredNode {
+  id: string;
+  nodeType: "memory" | "task" | "session";
+  title: string;
+  summary: string;
+  score: number;
+  projectId: string;
+  // memory-specific
+  kind?: string;
+  recallCue?: string;
+  sessionId?: string;
+  createdAt?: string;
+  // task-specific
+  status?: string;
+  taskOrder?: number;
+  parentId?: string;
+  // session-specific
+  startedAt?: string;
+}
 
 export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0, na = 0, nb = 0;
@@ -21,6 +41,64 @@ function recencyScore(createdAt: string, halfLifeDays = 14): number {
   const ageMs = Date.now() - new Date(createdAt).getTime();
   const ageDays = ageMs / (1000 * 60 * 60 * 24);
   return Math.pow(0.5, ageDays / halfLifeDays);
+}
+
+/** Unified vector search across Memory, Task, and Session nodes */
+export async function searchAll(
+  conn: InstanceType<typeof kuzu.Connection>,
+  projectId: string,
+  query: string,
+  topK = 5
+): Promise<ScoredNode[]> {
+  const queryVec = await embed(query);
+  const results: ScoredNode[] = [];
+
+  const memRows = await queryAll(
+    conn,
+    `MATCH (m:Memory {projectId: '${escape(projectId)}'})
+     WHERE size(m.embedding) > 0
+     RETURN m`
+  );
+  for (const r of memRows) {
+    const m = r["m"] as Memory & { embedding: number[] };
+    results.push({
+      nodeType: "memory", score: cosineSimilarity(queryVec, m.embedding),
+      id: m.id, title: m.title, summary: m.summary, projectId: m.projectId,
+      kind: m.kind, recallCue: m.recallCue, sessionId: m.sessionId, createdAt: m.createdAt,
+    });
+  }
+
+  const taskRows = await queryAll(
+    conn,
+    `MATCH (t:Task {projectId: '${escape(projectId)}'})
+     WHERE size(t.embedding) > 0
+     RETURN t`
+  );
+  for (const r of taskRows) {
+    const t = r["t"] as Task & { embedding: number[] };
+    results.push({
+      nodeType: "task", score: cosineSimilarity(queryVec, t.embedding),
+      id: t.id, title: t.title, summary: t.summary, projectId: t.projectId,
+      status: t.status, taskOrder: t.taskOrder, parentId: t.parentId, createdAt: t.createdAt,
+    });
+  }
+
+  const sessionRows = await queryAll(
+    conn,
+    `MATCH (s:Session {projectId: '${escape(projectId)}'})
+     WHERE size(s.embedding) > 0
+     RETURN s`
+  );
+  for (const r of sessionRows) {
+    const s = r["s"] as Session & { embedding: number[] };
+    results.push({
+      nodeType: "session", score: cosineSimilarity(queryVec, s.embedding),
+      id: s.id, title: s.title, summary: s.summary, projectId: s.projectId,
+      startedAt: s.startedAt,
+    });
+  }
+
+  return results.sort((a, b) => b.score - a.score).slice(0, topK);
 }
 
 /** Flat vector search — used by CLI `pensive search` */
