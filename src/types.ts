@@ -63,6 +63,26 @@ export interface Turn {
   files?: string[];
 }
 
+/** Kuzu graph node representing a stored conversation turn */
+export interface TurnNode {
+  id: string;          // turnId from JSONL
+  sessionId: string;
+  projectId: string;
+  timestamp: string;
+  userText: string;    // first 400 chars of user message
+  assistantText: string; // first 400 chars of assistant message
+  embedding?: number[];
+}
+
+/** Kuzu graph node representing a source file referenced in a turn */
+export interface ProjectFile {
+  id: string;          // "{projectId}:{path}"
+  path: string;        // relative to project root
+  projectId: string;
+  language: string;    // derived from file extension
+  lastSeenAt: string;
+}
+
 export interface ScoredMemory extends Memory {
   score: number;
   sessionTitle?: string;

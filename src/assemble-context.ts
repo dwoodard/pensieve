@@ -1,7 +1,7 @@
 import type { Memory, ScoredMemory, Task, ContextBundle } from "./types.js";
 import type kuzu from "kuzu";
 import { queryAll, escape } from "./kuzu-helpers.js";
-import { searchMemoriesWithGraph } from "./search.js";
+import { searchGraph } from "./search.js";
 
 export async function assembleContext(
   projectId: string,
@@ -32,7 +32,7 @@ export async function assembleContext(
   let keyMemories: ScoredMemory[];
   if (seedQuery) {
     try {
-      keyMemories = await searchMemoriesWithGraph(conn, projectId, seedQuery);
+      keyMemories = await searchGraph(conn, projectId, seedQuery) as unknown as ScoredMemory[];
     } catch {
       // Fall back to recency if embedding unavailable
       keyMemories = await recencyMemories(conn, projectId);

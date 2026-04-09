@@ -1,13 +1,13 @@
 import { embed } from "./llm.js";
 import { queryAll, escape } from "./kuzu-helpers.js";
-import type { Memory, Task, Session, ScoredMemory } from "./types.js";
+import type { Memory, Task, Session, TurnNode, ScoredMemory } from "./types.js";
 import type kuzu from "kuzu";
 
 export { ScoredMemory };
 
 export interface ScoredNode {
   id: string;
-  nodeType: "memory" | "task" | "session";
+  nodeType: "memory" | "task" | "session" | "turn";
   title: string;
   summary: string;
   score: number;
@@ -23,6 +23,9 @@ export interface ScoredNode {
   parentId?: string;
   // session-specific
   startedAt?: string;
+  // graph-walk context
+  sessionTitle?: string;
+  sessionSummary?: string;
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {
@@ -43,197 +46,188 @@ function recencyScore(createdAt: string, halfLifeDays = 14): number {
   return Math.pow(0.5, ageDays / halfLifeDays);
 }
 
-/** Unified vector search across Memory, Task, and Session nodes */
+// ── Row → ScoredNode helpers ────────────────────────────────────────────────
+
+function memoryNode(m: Memory & { embedding: number[] }, queryVec: number[], weight = 1): ScoredNode {
+  return {
+    nodeType: "memory", id: m.id, title: m.title, summary: m.summary,
+    projectId: m.projectId, score: cosineSimilarity(queryVec, m.embedding) * weight,
+    kind: m.kind, recallCue: m.recallCue, sessionId: m.sessionId, createdAt: m.createdAt,
+  };
+}
+
+function turnNode(t: TurnNode & { embedding: number[] }, queryVec: number[], weight = 1): ScoredNode {
+  return {
+    nodeType: "turn", id: t.id, title: t.userText.slice(0, 80),
+    summary: t.assistantText.slice(0, 160), projectId: t.projectId,
+    score: cosineSimilarity(queryVec, t.embedding) * weight,
+    sessionId: t.sessionId, createdAt: t.timestamp,
+  };
+}
+
+// ── Queries ─────────────────────────────────────────────────────────────────
+
+async function loadMemories(conn: InstanceType<typeof kuzu.Connection>, projectId: string) {
+  return queryAll(conn,
+    `MATCH (m:Memory {projectId: '${escape(projectId)}'}) WHERE size(m.embedding) > 0 RETURN m`
+  );
+}
+
+async function loadTurns(conn: InstanceType<typeof kuzu.Connection>, projectId: string) {
+  return queryAll(conn,
+    `MATCH (t:Turn {projectId: '${escape(projectId)}'}) WHERE size(t.embedding) > 0 RETURN t`
+  );
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
+
+/** Unified flat vector search across all node types */
 export async function searchAll(
   conn: InstanceType<typeof kuzu.Connection>,
   projectId: string,
   query: string,
   topK = 5
 ): Promise<ScoredNode[]> {
-  const queryVec = await embed(query);
-  const results: ScoredNode[] = [];
+  const pid = escape(projectId);
+  const [queryVec, memRows, taskRows, sessionRows, turnRows] = await Promise.all([
+    embed(query),
+    queryAll(conn, `MATCH (m:Memory {projectId: '${pid}'}) WHERE size(m.embedding) > 0 RETURN m`),
+    queryAll(conn, `MATCH (t:Task {projectId: '${pid}'}) WHERE size(t.embedding) > 0 RETURN t`),
+    queryAll(conn, `MATCH (s:Session {projectId: '${pid}'}) WHERE size(s.embedding) > 0 RETURN s`),
+    queryAll(conn, `MATCH (t:Turn {projectId: '${pid}'}) WHERE size(t.embedding) > 0 RETURN t`),
+  ]);
 
-  const memRows = await queryAll(
-    conn,
-    `MATCH (m:Memory {projectId: '${escape(projectId)}'})
-     WHERE size(m.embedding) > 0
-     RETURN m`
-  );
-  for (const r of memRows) {
-    const m = r["m"] as Memory & { embedding: number[] };
-    results.push({
-      nodeType: "memory", score: cosineSimilarity(queryVec, m.embedding),
-      id: m.id, title: m.title, summary: m.summary, projectId: m.projectId,
-      kind: m.kind, recallCue: m.recallCue, sessionId: m.sessionId, createdAt: m.createdAt,
-    });
-  }
-
-  const taskRows = await queryAll(
-    conn,
-    `MATCH (t:Task {projectId: '${escape(projectId)}'})
-     WHERE size(t.embedding) > 0
-     RETURN t`
-  );
-  for (const r of taskRows) {
-    const t = r["t"] as Task & { embedding: number[] };
-    results.push({
-      nodeType: "task", score: cosineSimilarity(queryVec, t.embedding),
-      id: t.id, title: t.title, summary: t.summary, projectId: t.projectId,
-      status: t.status, taskOrder: t.taskOrder, parentId: t.parentId, createdAt: t.createdAt,
-    });
-  }
-
-  const sessionRows = await queryAll(
-    conn,
-    `MATCH (s:Session {projectId: '${escape(projectId)}'})
-     WHERE size(s.embedding) > 0
-     RETURN s`
-  );
-  for (const r of sessionRows) {
-    const s = r["s"] as Session & { embedding: number[] };
-    results.push({
-      nodeType: "session", score: cosineSimilarity(queryVec, s.embedding),
-      id: s.id, title: s.title, summary: s.summary, projectId: s.projectId,
-      startedAt: s.startedAt,
-    });
-  }
+  const results: ScoredNode[] = [
+    ...memRows.map((r) => memoryNode(r["m"] as Memory & { embedding: number[] }, queryVec)),
+    ...taskRows.map((r) => {
+      const t = r["t"] as Task & { embedding: number[] };
+      return {
+        nodeType: "task" as const, id: t.id, title: t.title, summary: t.summary,
+        projectId: t.projectId, score: cosineSimilarity(queryVec, t.embedding),
+        status: t.status, taskOrder: t.taskOrder, parentId: t.parentId, createdAt: t.createdAt,
+      };
+    }),
+    ...sessionRows.map((r) => {
+      const s = r["s"] as Session & { embedding: number[] };
+      return {
+        nodeType: "session" as const, id: s.id, title: s.title, summary: s.summary,
+        projectId: s.projectId, score: cosineSimilarity(queryVec, s.embedding),
+        startedAt: s.startedAt,
+      };
+    }),
+    ...turnRows.map((r) => turnNode(r["t"] as TurnNode & { embedding: number[] }, queryVec)),
+  ];
 
   return results.sort((a, b) => b.score - a.score).slice(0, topK);
 }
 
-/** Flat vector search — used by CLI `pensive search` */
-export async function searchMemories(
-  conn: InstanceType<typeof kuzu.Connection>,
-  projectId: string,
-  query: string,
-  topK = 5
-): Promise<ScoredMemory[]> {
-  const queryVec = await embed(query);
-
-  const rows = await queryAll(
-    conn,
-    `MATCH (m:Memory {projectId: '${escape(projectId)}'})
-     WHERE size(m.embedding) > 0
-     RETURN m`
-  );
-
-  return rows
-    .map((r) => {
-      const m = r["m"] as Memory & { embedding: number[] };
-      return { ...m, score: cosineSimilarity(queryVec, m.embedding) };
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK);
-}
-
 /**
- * Graph-walk context assembly:
- * 1. Embed the seed query (active task title)
- * 2. Score all memories: similarity × recency decay
+ * Graph-walk retrieval:
+ * 1. Embed the seed query
+ * 2. Score all Memory + Turn nodes: similarity × recency decay
  * 3. Take top seedK hits as entry points
- * 4. Walk up to parent sessions — pull sibling memories (1 hop, half weight)
- * 5. Walk across RELATED_TO edges (1 hop, half weight)
+ * 4. Walk to parent session → pull sibling memories + turns (half weight)
+ * 5. Walk RELATED_TO edges on memory seeds (half weight)
  * 6. Deduplicate, re-rank, return topK
  */
-export async function searchMemoriesWithGraph(
+export async function searchGraph(
   conn: InstanceType<typeof kuzu.Connection>,
   projectId: string,
   query: string,
   topK = 8,
   seedK = 4,
   embedFn: (text: string) => Promise<number[]> = embed
-): Promise<ScoredMemory[]> {
-  const queryVec = await embedFn(query);
+): Promise<ScoredNode[]> {
+  const [queryVec, memRows, turnRows] = await Promise.all([
+    embedFn(query),
+    loadMemories(conn, projectId),
+    loadTurns(conn, projectId),
+  ]);
 
-  // Load all memories with embeddings
-  const rows = await queryAll(
-    conn,
-    `MATCH (m:Memory {projectId: '${escape(projectId)}'})
-     WHERE size(m.embedding) > 0
-     RETURN m`
-  );
+  const scored: ScoredNode[] = [
+    ...memRows.map((r) => {
+      const m = r["m"] as Memory & { embedding: number[] };
+      return memoryNode(m, queryVec, recencyScore(m.createdAt));
+    }),
+    ...turnRows.map((r) => {
+      const t = r["t"] as TurnNode & { embedding: number[] };
+      return turnNode(t, queryVec, recencyScore(t.timestamp));
+    }),
+  ];
 
-  if (rows.length === 0) return [];
-
-  // Score: similarity × recency
-  const scored = rows.map((r) => {
-    const m = r["m"] as Memory & { embedding: number[] };
-    const sim = cosineSimilarity(queryVec, m.embedding);
-    const rec = recencyScore(m.createdAt);
-    return { ...m, score: sim * rec, _sim: sim };
-  });
+  if (scored.length === 0) return [];
 
   scored.sort((a, b) => b.score - a.score);
   const seeds = scored.slice(0, seedK);
 
-  // Collect candidate IDs → best score seen
-  const candidates = new Map<string, ScoredMemory>();
-  for (const s of seeds) {
-    candidates.set(s.id, s);
-  }
+  const candidates = new Map<string, ScoredNode>(seeds.map((s) => [s.id, s]));
 
-  // Walk up: for each seed, find its parent session and pull sibling memories
-  for (const seed of seeds) {
-    const sessionRows = await queryAll(
-      conn,
-      `MATCH (s:Session)-[:HAS_MEMORY]->(m:Memory {id: '${escape(seed.id)}'})
-       RETURN s.id AS sid, s.title AS stitle, s.summary AS ssummary`
-    );
+  await Promise.all(seeds.map(async (seed) => {
+    const rel = seed.nodeType === "memory" ? "HAS_MEMORY" : "HAS_TURN";
+    const nodeLabel = seed.nodeType === "memory" ? "Memory" : "Turn";
 
-    for (const sr of sessionRows) {
+    const sessionRows = await queryAll(conn,
+      `MATCH (s:Session)-[:${rel}]->(n:${nodeLabel} {id: '${escape(seed.id)}'})
+       RETURN s.id AS sid, s.title AS stitle, s.summary AS ssummary`);
+
+    await Promise.all(sessionRows.map(async (sr) => {
       const sid = String(sr["sid"]);
       const stitle = String(sr["stitle"] ?? "");
       const ssummary = String(sr["ssummary"] ?? "");
 
-      // Siblings in the same session
-      const sibRows = await queryAll(
-        conn,
-        `MATCH (s:Session {id: '${escape(sid)}'})-[:HAS_MEMORY]->(sib:Memory)
-         WHERE sib.id <> '${escape(seed.id)}' AND size(sib.embedding) > 0
-         RETURN sib`
-      );
+      if (!candidates.get(seed.id)?.sessionTitle) {
+        candidates.set(seed.id, { ...candidates.get(seed.id)!, sessionTitle: stitle, sessionSummary: ssummary });
+      }
 
-      for (const sibRow of sibRows) {
-        const sib = sibRow["sib"] as Memory & { embedding: number[] };
-        if (candidates.has(sib.id)) continue;
-        const sim = cosineSimilarity(queryVec, sib.embedding);
-        const rec = recencyScore(sib.createdAt);
-        // Half weight for hop-1 nodes
-        candidates.set(sib.id, {
-          ...sib,
-          score: sim * rec * 0.5,
-          sessionTitle: stitle,
-          sessionSummary: ssummary,
+      const [sibMemRows, sibTurnRows] = await Promise.all([
+        queryAll(conn,
+          `MATCH (s:Session {id: '${escape(sid)}'})-[:HAS_MEMORY]->(m:Memory)
+           WHERE m.id <> '${escape(seed.id)}' AND size(m.embedding) > 0 RETURN m`),
+        queryAll(conn,
+          `MATCH (s:Session {id: '${escape(sid)}'})-[:HAS_TURN]->(t:Turn)
+           WHERE t.id <> '${escape(seed.id)}' AND size(t.embedding) > 0 RETURN t`),
+      ]);
+
+      for (const r of sibMemRows) {
+        const m = r["m"] as Memory & { embedding: number[] };
+        if (candidates.has(m.id)) continue;
+        candidates.set(m.id, {
+          ...memoryNode(m, queryVec, recencyScore(m.createdAt) * 0.5),
+          sessionTitle: stitle, sessionSummary: ssummary,
         });
       }
 
-      // Attach session info to the seed itself
-      const existing = candidates.get(seed.id)!;
-      if (!existing.sessionTitle) {
-        candidates.set(seed.id, { ...existing, sessionTitle: stitle, sessionSummary: ssummary });
+      for (const r of sibTurnRows) {
+        const t = r["t"] as TurnNode & { embedding: number[] };
+        if (candidates.has(t.id)) continue;
+        candidates.set(t.id, turnNode(t, queryVec, recencyScore(t.timestamp) * 0.5));
+      }
+    }));
+
+    // Walk RELATED_TO edges (memory seeds only)
+    if (seed.nodeType === "memory") {
+      const relRows = await queryAll(conn,
+        `MATCH (m:Memory {id: '${escape(seed.id)}'})-[:RELATED_TO]->(rel:Memory)
+         WHERE size(rel.embedding) > 0 RETURN rel`);
+      for (const rr of relRows) {
+        const rel = rr["rel"] as Memory & { embedding: number[] };
+        if (candidates.has(rel.id)) continue;
+        candidates.set(rel.id, memoryNode(rel, queryVec, recencyScore(rel.createdAt) * 0.5));
       }
     }
-  }
+  }));
 
-  // Walk across: RELATED_TO and SUPERSEDES neighbors of seeds
-  for (const seed of seeds) {
-    const relRows = await queryAll(
-      conn,
-      `MATCH (m:Memory {id: '${escape(seed.id)}'})-[:RELATED_TO]->(rel:Memory)
-       WHERE size(rel.embedding) > 0
-       RETURN rel`
-    );
-    for (const rr of relRows) {
-      const rel = rr["rel"] as Memory & { embedding: number[] };
-      if (candidates.has(rel.id)) continue;
-      const sim = cosineSimilarity(queryVec, rel.embedding);
-      const rec = recencyScore(rel.createdAt);
-      candidates.set(rel.id, { ...rel, score: sim * rec * 0.5 });
-    }
-  }
-
-  // Final rank and trim
   return Array.from(candidates.values())
     .sort((a, b) => b.score - a.score)
     .slice(0, topK);
 }
+
+/** @deprecated use searchGraph */
+export const searchMemoriesWithGraph = searchGraph as unknown as (
+  conn: InstanceType<typeof kuzu.Connection>,
+  projectId: string,
+  query: string,
+  topK?: number,
+  seedK?: number,
+  embedFn?: (text: string) => Promise<number[]>
+) => Promise<ScoredMemory[]>;

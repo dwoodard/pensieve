@@ -2,6 +2,8 @@ import kuzu from "kuzu";
 import * as fs from "fs";
 import * as path from "path";
 import { cosineSimilarity } from "./search.js";
+import { embed } from "./llm.js";
+import { escape } from "./kuzu-helpers.js";
 
 const _cache = new Map<string, {
   db: InstanceType<typeof kuzu.Database>;
@@ -26,7 +28,8 @@ export function getDb(projectMemoryDir: string): {
 }
 
 export async function applySchema(
-  conn: InstanceType<typeof kuzu.Connection>
+  conn: InstanceType<typeof kuzu.Connection>,
+  projectMemoryDir?: string
 ): Promise<void> {
   const statements = [
     `CREATE NODE TABLE IF NOT EXISTS Project(
@@ -72,9 +75,29 @@ export async function applySchema(
       embedding FLOAT[],
       PRIMARY KEY (id)
     )`,
+    `CREATE NODE TABLE IF NOT EXISTS Turn(
+      id STRING,
+      sessionId STRING,
+      projectId STRING,
+      timestamp STRING,
+      userText STRING,
+      assistantText STRING,
+      embedding FLOAT[],
+      PRIMARY KEY (id)
+    )`,
+    `CREATE NODE TABLE IF NOT EXISTS File(
+      id STRING,
+      path STRING,
+      projectId STRING,
+      language STRING,
+      lastSeenAt STRING,
+      PRIMARY KEY (id)
+    )`,
     `CREATE REL TABLE IF NOT EXISTS HAS_SESSION(FROM Project TO Session)`,
     `CREATE REL TABLE IF NOT EXISTS HAS_TASK(FROM Project TO Task)`,
     `CREATE REL TABLE IF NOT EXISTS HAS_MEMORY(FROM Session TO Memory)`,
+    `CREATE REL TABLE IF NOT EXISTS HAS_TURN(FROM Session TO Turn)`,
+    `CREATE REL TABLE IF NOT EXISTS REFERENCES(FROM Turn TO File)`,
     `CREATE REL TABLE IF NOT EXISTS RELATED_TO(FROM Memory TO Memory, score FLOAT, createdAt STRING)`,
   ];
 
@@ -196,4 +219,129 @@ export async function applySchema(
       }
     }
   } catch { /* best-effort */ }
+
+  // Backfill: index existing JSONL session turns as Turn nodes
+  if (projectMemoryDir) {
+    backfillTurns(conn, projectMemoryDir).catch(() => {});
+  }
+}
+
+export function extractFilePaths(text: string): string[] {
+  const paths = new Set<string>();
+  const mdLink = /\[[^\]]*\]\(([^)#\s]+)/g;
+  let m;
+  while ((m = mdLink.exec(text)) !== null) {
+    const p = m[1];
+    if (p.startsWith("http://") || p.startsWith("https://")) continue;
+    if (/\.\w+$/.test(p) || p.includes("/")) paths.add(p);
+  }
+  return [...paths];
+}
+
+function langFromPath(p: string): string {
+  const ext = p.split(".").pop() ?? "";
+  const map: Record<string, string> = {
+    ts: "ts", tsx: "tsx", js: "js", jsx: "jsx",
+    py: "py", go: "go", rs: "rs", java: "java",
+    md: "md", json: "json", yaml: "yaml", yml: "yaml",
+  };
+  return map[ext] ?? ext;
+}
+
+async function backfillTurns(
+  conn: InstanceType<typeof kuzu.Connection>,
+  projectMemoryDir: string
+): Promise<void> {
+  const sessionsDir = path.join(projectMemoryDir, "sessions");
+  if (!fs.existsSync(sessionsDir)) return;
+
+  const files = fs.readdirSync(sessionsDir).filter((f) => f.endsWith(".jsonl"));
+
+  for (const file of files) {
+    const sessionId = file.replace(".jsonl", "");
+    const lines = fs.readFileSync(path.join(sessionsDir, file), "utf-8")
+      .split("\n").filter((l) => l.trim());
+
+    for (const line of lines) {
+      let entry: { turnId: string; timestamp: string; messages: Array<{ role: string; content: string }>; files?: string[] };
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (!entry.turnId) continue;
+
+      // Skip if already in DB
+      const existing = await conn.query(`MATCH (t:Turn {id: '${escape(entry.turnId)}'}) RETURN t.id`);
+      const eqr = Array.isArray(existing) ? existing[0] : existing;
+      const erows = await (eqr as { getAll(): Promise<Record<string, unknown>[]> }).getAll();
+      if (erows.length > 0) continue;
+
+      const userText = (entry.messages.find((m) => m.role === "user")?.content ?? "").slice(0, 400);
+      const assistantText = (entry.messages.find((m) => m.role === "assistant")?.content ?? "").slice(0, 400);
+
+      // Determine projectId from session node if available
+      const sRows = await conn.query(`MATCH (s:Session {id: '${escape(sessionId)}'}) RETURN s.projectId`);
+      const sqr = Array.isArray(sRows) ? sRows[0] : sRows;
+      const sdata = await (sqr as { getAll(): Promise<Record<string, unknown>[]> }).getAll();
+      const projectId = sdata.length > 0 ? String(sdata[0]["s.projectId"] ?? "") : "";
+      if (!projectId) continue;
+
+      // Extract file paths from messages
+      const allText = entry.messages.map((m) => m.content).join(" ");
+      const filePaths = extractFilePaths(allText);
+
+      // Build embed text
+      const filesSuffix = filePaths.length > 0 ? `\nfiles: ${filePaths.join(", ")}` : "";
+      const embedText = `user: ${userText}\nassistant: ${assistantText}${filesSuffix}`;
+
+      await conn.query(
+        `CREATE (t:Turn {
+          id: '${escape(entry.turnId)}',
+          sessionId: '${escape(sessionId)}',
+          projectId: '${escape(projectId)}',
+          timestamp: '${escape(entry.timestamp)}',
+          userText: '${escape(userText)}',
+          assistantText: '${escape(assistantText)}',
+          embedding: []
+        })`
+      );
+
+      // Wire Session → Turn
+      await conn.query(
+        `MATCH (s:Session {id: '${escape(sessionId)}'}), (t:Turn {id: '${escape(entry.turnId)}'})
+         WHERE NOT EXISTS { MATCH (s)-[:HAS_TURN]->(t) }
+         CREATE (s)-[:HAS_TURN]->(t)`
+      ).catch(() => {});
+
+      // Upsert File nodes + REFERENCES edges
+      for (const fp of filePaths) {
+        const fileId = `${projectId}:${fp}`;
+        const lang = langFromPath(fp);
+        const now = entry.timestamp;
+        const chk = await conn.query(`MATCH (f:File {id: '${escape(fileId)}'}) RETURN f.id`);
+        const cqr = Array.isArray(chk) ? chk[0] : chk;
+        const crow = await (cqr as { getAll(): Promise<Record<string, unknown>[]> }).getAll();
+        if (crow.length === 0) {
+          await conn.query(
+            `CREATE (f:File {id: '${escape(fileId)}', path: '${escape(fp)}',
+              projectId: '${escape(projectId)}', language: '${escape(lang)}',
+              lastSeenAt: '${escape(now)}'})`
+          ).catch(() => {});
+        } else {
+          await conn.query(
+            `MATCH (f:File {id: '${escape(fileId)}'}) SET f.lastSeenAt = '${escape(now)}'`
+          ).catch(() => {});
+        }
+
+        await conn.query(
+          `MATCH (t:Turn {id: '${escape(entry.turnId)}'}), (f:File {id: '${escape(fileId)}'})
+           WHERE NOT EXISTS { MATCH (t)-[:REFERENCES]->(f) }
+           CREATE (t)-[:REFERENCES]->(f)`
+        ).catch(() => {});
+      }
+
+      // Embed async — fire and forget
+      embed(embedText).then((vec) => {
+        const literal = `[${vec.join(", ")}]`;
+        conn.query(`MATCH (t:Turn {id: '${escape(entry.turnId)}'}) SET t.embedding = ${literal}`).catch(() => {});
+      }).catch(() => {});
+    }
+  }
 }

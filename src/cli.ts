@@ -19,7 +19,7 @@ import {
 } from "./config.js";
 import { embed, llmChatMessages } from "./llm.js";
 import type { ChatMessage, ToolDefinition } from "./llm.js";
-import { searchAll, searchMemoriesWithGraph } from "./search.js";
+import { searchAll, searchGraph } from "./search.js";
 import type { Turn } from "./types.js";
 
 const cerr = (msg: string) => console.error(chalk.red(msg));
@@ -251,7 +251,7 @@ program
 program
   .command("search <query>")
   .description("Semantic search across memories, tasks, and sessions")
-  .option("-k, --top <n>", "Number of results", "10")
+.option("-k, --top <n>", "Number of results", "10")
   .action(async (query: string, opts) => {
     const detected = detectProject(process.cwd());
     if (!detected) { cerr("No pensive project found. Run: pensive init"); process.exit(1); }
@@ -259,7 +259,7 @@ program
     const projectMemoryDir = path.join(detected.projectRoot, ".pensive");
     const config = readProjectConfig(projectMemoryDir);
     const { conn } = getDb(projectMemoryDir);
-    await applySchema(conn);
+    await applySchema(conn, projectMemoryDir);
 
     const topK = parseInt(opts.top ?? "5", 10);
     const results = await searchAll(conn, config.projectId, query, topK);
@@ -296,7 +296,7 @@ program
 
 program
   .command("backfill-embeddings")
-  .description("Generate and store embeddings for all nodes missing them (Memory, Task, Session)")
+  .description("Generate and store embeddings for all nodes missing them (Memory, Task, Session, Turn)")
   .action(async () => {
     const detected = detectProject(process.cwd());
     if (!detected) { cerr("No pensive project found. Run: pensive init"); process.exit(1); }
@@ -304,7 +304,7 @@ program
     const projectMemoryDir = path.join(detected.projectRoot, ".pensive");
     const config = readProjectConfig(projectMemoryDir);
     const { conn } = getDb(projectMemoryDir);
-    await applySchema(conn);
+    await applySchema(conn, projectMemoryDir);
     const pid = config.projectId;
 
     type BackfillRow = { id: string; text: string; setQuery: (id: string, literal: string) => string };
@@ -336,14 +336,23 @@ program
       setQuery: (id, lit) => `MATCH (s:Session {id: '${id}'}) SET s.embedding = ${lit}`,
     }));
 
-    const rows = [...memRows, ...taskRows, ...sessionRows];
+    const turnRows = (await queryAll(conn,
+      `MATCH (t:Turn {projectId: '${pid}'}) WHERE t.embedding IS NULL OR size(t.embedding) = 0
+       RETURN t.id AS id, t.userText AS userText, t.assistantText AS assistantText`
+    )).map((r): BackfillRow => ({
+      id: String(r["id"]),
+      text: `user: ${r["userText"]}\nassistant: ${r["assistantText"]}`,
+      setQuery: (id, lit) => `MATCH (t:Turn {id: '${id}'}) SET t.embedding = ${lit}`,
+    }));
+
+    const rows = [...memRows, ...taskRows, ...sessionRows, ...turnRows];
 
     if (rows.length === 0) {
       console.log(chalk.dim("All nodes already have embeddings."));
       return;
     }
 
-    console.log(chalk.cyan(`Backfilling ${rows.length} node(s) (${memRows.length} memories, ${taskRows.length} tasks, ${sessionRows.length} sessions)...`));
+    console.log(chalk.cyan(`Backfilling ${rows.length} node(s) (${memRows.length} memories, ${taskRows.length} tasks, ${sessionRows.length} sessions, ${turnRows.length} turns)...`));
     let done = 0, failed = 0;
 
     for (const row of rows) {
@@ -555,7 +564,7 @@ async function getProjectDb(cwd: string) {
   }
   const config = readProjectConfig(projectMemoryDir);
   const { conn } = getDb(projectMemoryDir);
-  await applySchema(conn); // runs migrations; all statements are idempotent
+  await applySchema(conn, projectMemoryDir); // runs migrations; all statements are idempotent
   return { config, conn, projectMemoryDir };
 }
 
@@ -1394,10 +1403,10 @@ program
     async function executeTool(name: string, args: Record<string, string>): Promise<string> {
       if (name === "search_memories") {
         const k = parseInt(args["top_k"] ?? String(topK), 10);
-        const results = await searchMemoriesWithGraph(conn, pid, args["query"] ?? "", k);
+        const results = await searchGraph(conn, pid, args["query"] ?? "", k);
         if (results.length === 0) return "No memories found.";
         return results
-          .map((m) => `[${m.kind.toUpperCase()}] ${m.title}\n${m.summary}`)
+          .map((m) => `[${(m.kind ?? m.nodeType).toUpperCase()}] ${m.title}\n${m.summary}`)
           .join("\n\n");
       }
 

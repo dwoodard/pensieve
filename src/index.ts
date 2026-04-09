@@ -73,7 +73,7 @@ export async function ingestTurn(turn: Turn): Promise<void> {
   }
 
   // 2. Append turn to session log
-  appendTurn(turn, projectMemoryDir, sessionId);
+  appendTurn(turn, projectMemoryDir, sessionId, conn, config.projectId);
 
   // 3. Update rolling session summary — write to file and sync to Kuzu
   const existingSummary = readSummary(projectMemoryDir, sessionId);

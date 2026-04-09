@@ -155,7 +155,7 @@ async function main(): Promise<void> {
       if (projectMemoryDir2) {
         const config = readProjectConfig(projectMemoryDir2);
         const { conn: conn2 } = getDb(projectMemoryDir2);
-        await applySchema(conn2);
+        await applySchema(conn2, projectMemoryDir2);
         const pid = config.projectId;
 
         const rows = await queryAll(conn2, `MATCH (p:Project {id: '${pid}'}) RETURN p`);
