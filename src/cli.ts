@@ -315,8 +315,9 @@ program
     console.log(`\n${chalk.dim("Query:")} "${chalk.white(query)}"\n`);
 
     for (const r of results) {
+      const fmtDate = (d?: string) => d ? chalk.dim(new Date(d).toLocaleString()) : "";
       if (r.nodeType === "memory") {
-        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[" + (r.kind ?? "memory").toUpperCase() + "]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
+        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[" + (r.kind ?? "memory").toUpperCase() + "]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.createdAt)}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary)}`);
         if (r.sessionTitle) console.log(`   ${chalk.dim("session:")} ${r.sessionTitle}`);
         if (r.breadcrumbs && r.breadcrumbs.length > 0) {
@@ -325,14 +326,13 @@ program
         }
       } else if (r.nodeType === "task") {
         const statusColor = r.status === "active" ? chalk.green : r.status === "blocked" ? chalk.yellow : r.status === "done" ? chalk.dim : chalk.white;
-        console.log(`${chalk.bold.cyan("──")} ${chalk.dim(shortId(String(r.id)))} ${chalk.bold("[TASK]")} ${chalk.white(r.title)}  ${statusColor(r.status ?? "")}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
+        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[TASK]")} ${chalk.white(r.title)}  ${statusColor(r.status ?? "")}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.createdAt)}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary)}`);
       } else if (r.nodeType === "turn") {
-        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[TURN]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
+        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[TURN]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.createdAt)}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary.slice(0, 120) + (r.summary.length > 120 ? "…" : ""))}`);
-        if (r.createdAt) console.log(`   ${chalk.dim("timestamp:")} ${chalk.dim(new Date(r.createdAt).toLocaleString())}`);
       } else {
-        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[SESSION]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}`);
+        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[SESSION]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.startedAt)}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary.slice(0, 120) + (r.summary.length > 120 ? "…" : ""))}`);
       }
       console.log();
