@@ -1332,6 +1332,50 @@ program
           },
         },
       },
+      {
+        type: "function",
+        function: {
+          name: "complete_task",
+          description: "Mark a task as done by title substring, id prefix, or 'active' for the current active task.",
+          parameters: {
+            type: "object",
+            properties: {
+              target: { type: "string", description: "Task title substring, id prefix, or 'active'" },
+            },
+            required: ["target"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "start_task",
+          description: "Set a pending task as the active task by title substring or id prefix. Pushes any current active task back to the queue.",
+          parameters: {
+            type: "object",
+            properties: {
+              target: { type: "string", description: "Task title substring or id prefix" },
+            },
+            required: ["target"],
+          },
+        },
+      },
+      {
+        type: "function",
+        function: {
+          name: "add_subtask",
+          description: "Add a subtask under a parent task. The parent is matched by title substring or id prefix, or use 'active' for the current active task.",
+          parameters: {
+            type: "object",
+            properties: {
+              parent: { type: "string", description: "Parent task title substring, id prefix, or 'active'" },
+              title: { type: "string", description: "Subtask title" },
+              summary: { type: "string", description: "Optional subtask summary" },
+            },
+            required: ["parent", "title"],
+          },
+        },
+      },
     ];
 
     // ── Tool executor ─────────────────────────────────────────────────────────
@@ -1404,6 +1448,70 @@ program
         return `Summary set for "${match["title"]}".`;
       }
 
+      if (name === "complete_task") {
+        const target = args["target"];
+        if (!target) return "Error: target is required.";
+        const allR = await queryAll(conn, `MATCH (t:Task {projectId: '${pid}'}) WHERE t.status <> 'done' RETURN t ORDER BY t.taskOrder ASC`);
+        const all = allR.map((r) => r["t"] as Record<string, unknown>);
+        let task: Record<string, unknown> | undefined;
+        if (target === "active") {
+          task = all.find((t) => t["status"] === "active");
+        } else {
+          task = all.find((t) =>
+            String(t["title"]).toLowerCase().includes(target.toLowerCase()) ||
+            String(t["id"]).includes(target)
+          );
+        }
+        if (!task) return `No task matching "${target}".`;
+        await conn.query(`MATCH (t:Task {id: '${esc(String(task["id"]))}'}) SET t.status = 'done'`);
+        return `Marked done: "${task["title"]}"`;
+      }
+
+      if (name === "start_task") {
+        const target = args["target"];
+        if (!target) return "Error: target is required.";
+        const pendingR = await queryAll(conn, `MATCH (t:Task {projectId: '${pid}', status: 'pending'}) RETURN t ORDER BY t.taskOrder ASC`);
+        const pending = pendingR.map((r) => r["t"] as Record<string, unknown>);
+        const task = pending.find((t) =>
+          String(t["title"]).toLowerCase().includes(target.toLowerCase()) ||
+          String(t["id"]).includes(target)
+        );
+        if (!task) return `No pending task matching "${target}".`;
+        const minR = await queryAll(conn, `MATCH (t:Task {projectId: '${esc(pid)}', status: 'pending'}) RETURN min(t.taskOrder) AS minOrder`);
+        const minOrder = Number(minR[0]?.["minOrder"] ?? 1);
+        await conn.query(`MATCH (t:Task {projectId: '${esc(pid)}', status: 'active'}) SET t.status = 'pending', t.taskOrder = ${minOrder - 1}`);
+        await conn.query(`MATCH (t:Task {id: '${esc(String(task["id"]))}'}) SET t.status = 'active'`);
+        return `Now active: "${task["title"]}"`;
+      }
+
+      if (name === "add_subtask") {
+        const parentTarget = args["parent"];
+        const title = args["title"];
+        if (!parentTarget || !title) return "Error: parent and title are required.";
+        const allR = await queryAll(conn, `MATCH (t:Task {projectId: '${pid}'}) WHERE t.status <> 'done' RETURN t ORDER BY t.taskOrder ASC`);
+        const all = allR.map((r) => r["t"] as Record<string, unknown>);
+        let parentTask: Record<string, unknown> | undefined;
+        if (parentTarget === "active") {
+          parentTask = all.find((t) => t["status"] === "active");
+        } else {
+          parentTask = all.find((t) =>
+            String(t["title"]).toLowerCase().includes(parentTarget.toLowerCase()) ||
+            String(t["id"]).includes(parentTarget)
+          );
+        }
+        if (!parentTask) return `No task matching "${parentTarget}".`;
+        const parentId = String(parentTask["id"]);
+        const orderR = await queryAll(conn, `MATCH (t:Task {projectId: '${pid}', status: 'pending'}) RETURN max(t.taskOrder) AS maxOrder`);
+        const maxOrder = Number(orderR[0]?.["maxOrder"] ?? 0);
+        const id = `task_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+        const summary = args["summary"] ?? "";
+        await conn.query(
+          `CREATE (t:Task {id: '${esc(id)}', title: '${esc(title)}', summary: '${esc(summary)}', status: 'pending', taskOrder: ${maxOrder + 1}, projectId: '${esc(pid)}', createdAt: '${new Date().toISOString()}', parentId: '${esc(parentId)}'})`
+        );
+        await conn.query(`MATCH (p:Project {id: '${esc(pid)}'}), (t:Task {id: '${esc(id)}'}) CREATE (p)-[:HAS_TASK]->(t)`);
+        return `Subtask added: "${title}" under "${parentTask["title"]}"`;
+      }
+
       return `Unknown tool: ${name}`;
     }
 
@@ -1440,29 +1548,14 @@ program
 
       if (!userInput || userInput === "/quit" || userInput === "/exit") break;
 
-      // Auto-search memories for context
-      process.stdout.write(chalk.dim("  [searching memories…]"));
-      let memoryContext = "";
-      try {
-        const found = await searchMemoriesWithGraph(conn, pid, userInput, topK);
-        process.stdout.write("\r\x1b[K");
-        if (found.length > 0) {
-          const labels = found.map((m) => `[${m.kind}] ${m.title}`);
-          console.log(chalk.dim(`  Found: ${labels.join("  ·  ")}`));
-          memoryContext = found.map((m) => `[${m.kind.toUpperCase()}] ${m.title}\n${m.summary}`).join("\n\n");
-        }
-      } catch {
-        process.stdout.write("\r\x1b[K");
-      }
-
       // System prompt
       const systemParts = [
         `You are a helpful assistant for the project "${config.projectName}".`,
         `You have tools to search memories, list tasks, add tasks, and set task summaries.`,
         `When asked to perform an action (add a task, etc.), use the appropriate tool — do not just describe it.`,
+        `When asked about project information, use search_memories to find relevant context.`,
       ];
       if (activeTask) systemParts.push(`\nActive task: ${activeTask["title"]}`);
-      if (memoryContext) systemParts.push(`\nRelevant memories:\n\n${memoryContext}`);
 
       const messages: ChatMsg[] = [
         { role: "system", content: systemParts.join("\n") },
