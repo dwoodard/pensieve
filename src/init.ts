@@ -74,18 +74,43 @@ export async function initProject(cwd: string): Promise<boolean> {
     }
   }
 
-  // Write hook registrations
+  // Write hook registrations and slash commands
   writeClaudeSettings(projectRoot);
   writeGithubHooks(projectRoot);
+  writeSlashCommands(projectRoot, false);
 
   console.log(`Initialized project: ${projectName}`);
   console.log(`  ID:     ${projectId}`);
   if (remoteUrl) console.log(`  Remote: ${remoteUrl}`);
   console.log(`  Path:   ${projectMemoryDir}`);
   console.log(`  Hooks:  .claude/settings.json, .github/hooks/pensieve.json`);
+  console.log(`  Cmds:   .claude/commands/pensieve-{search,recall,log,file}.md`);
   console.log(`  Run "pensieve config" to set your LLM and embedding models.`);
 
   return true;
+}
+
+export function updateProject(cwd: string, force: boolean): void {
+  const projectRoot = cwd;
+  const configPath = path.join(projectRoot, ".pensieve", "config.json");
+
+  if (!fs.existsSync(configPath)) {
+    console.error("Not a pensieve project. Run 'pensieve init' first.");
+    process.exit(1);
+  }
+
+  const config: ProjectConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  console.log(`Updating: ${config.projectName}`);
+
+  writeClaudeSettings(projectRoot);
+  console.log("  ✓ hooks (.claude/settings.json)");
+
+  writeGithubHooks(projectRoot);
+  console.log("  ✓ hooks (.github/hooks/pensieve.json)");
+
+  const { written, skipped } = writeSlashCommands(projectRoot, force);
+  for (const name of written) console.log(`  ✓ .claude/commands/${name}.md`);
+  for (const name of skipped) console.log(`  ~ .claude/commands/${name}.md (skipped — already exists, use --force to overwrite)`);
 }
 
 const HOOK_EVENTS: Array<[event: string, type: string]> = [
@@ -124,6 +149,80 @@ function writeClaudeSettings(projectRoot: string): void {
 
   existing["hooks"] = hooks;
   fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
+}
+
+const SLASH_COMMANDS: Array<[name: string, content: string]> = [
+  [
+    "pensieve-search",
+    `Run this command and incorporate the results into your response:
+
+\`\`\`bash
+pensieve search "$ARGUMENTS"
+\`\`\`
+
+Review the output carefully. Surface any relevant prior decisions, patterns, or context that apply to what we're working on. If results are thin, say so briefly and continue.
+`,
+  ],
+  [
+    "pensieve-recall",
+    `Load the full project memory context by running:
+
+\`\`\`bash
+pensieve context
+\`\`\`
+
+Read the output and give a brief summary of the most relevant memories, active tasks, and recent session context. Focus on what's directly useful for our current conversation.
+`,
+  ],
+  [
+    "pensieve-log",
+    `Log the following decision or insight to memory: $ARGUMENTS
+
+State it clearly in your response in this format so pensieve captures it at session end:
+
+> **Logged:** [restate the key decision or insight in one or two sentences]
+
+Then run:
+
+\`\`\`bash
+pensieve search "$ARGUMENTS"
+\`\`\`
+
+to surface any related prior context that's already stored.
+`,
+  ],
+  [
+    "pensieve-file",
+    `Find prior work and context related to this file:
+
+\`\`\`bash
+pensieve search --file $ARGUMENTS
+\`\`\`
+
+Review the output and summarize: which sessions touched this file, what decisions were made, and any patterns or gotchas relevant to working with it now.
+`,
+  ],
+];
+
+/** .claude/commands/pensieve-*.md — custom slash commands for Claude Code */
+function writeSlashCommands(projectRoot: string, force: boolean): { written: string[]; skipped: string[] } {
+  const commandsDir = path.join(projectRoot, ".claude", "commands");
+  fs.mkdirSync(commandsDir, { recursive: true });
+
+  const written: string[] = [];
+  const skipped: string[] = [];
+
+  for (const [name, content] of SLASH_COMMANDS) {
+    const filePath = path.join(commandsDir, `${name}.md`);
+    if (force || !fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, content);
+      written.push(name);
+    } else {
+      skipped.push(name);
+    }
+  }
+
+  return { written, skipped };
 }
 
 /** .github/hooks/pensieve.json — flat format */

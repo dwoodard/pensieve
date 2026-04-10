@@ -5,7 +5,7 @@ import * as path from "path";
 import chalk from "chalk";
 import * as net from "net";
 import { execSync, spawnSync } from "child_process";
-import { initProject } from "./init.js";
+import { initProject, updateProject } from "./init.js";
 import { ingestTurn } from "./index.js";
 import { detectProject } from "./detect-project.js";
 import { getDb, applySchema } from "./db.js";
@@ -124,6 +124,19 @@ program
       }
     } catch (err) {
       console.error(chalk.red("Init failed:"), err instanceof Error ? err.message : err);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("update")
+  .description("Update hooks and slash commands to the latest pensieve version")
+  .option("--force", "Overwrite existing slash command files", false)
+  .action((opts) => {
+    try {
+      updateProject(process.cwd(), opts.force);
+    } catch (err) {
+      console.error(chalk.red("Update failed:"), err instanceof Error ? err.message : err);
       process.exit(1);
     }
   });
