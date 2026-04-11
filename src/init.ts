@@ -76,15 +76,14 @@ export async function initProject(cwd: string): Promise<boolean> {
 
   // Write hook registrations and slash commands
   writeClaudeSettings(projectRoot);
-  writeGithubHooks(projectRoot);
   writeSlashCommands(projectRoot, false);
 
   console.log(`Initialized project: ${projectName}`);
   console.log(`  ID:     ${projectId}`);
   if (remoteUrl) console.log(`  Remote: ${remoteUrl}`);
   console.log(`  Path:   ${projectMemoryDir}`);
-  console.log(`  Hooks:  .claude/settings.json, .github/hooks/pensieve.json`);
-  console.log(`  Cmds:   .claude/commands/pensieve-{search,recall,log,file}.md`);
+  console.log(`  Hooks:  .claude/settings.json`);
+  console.log(`  Cmds:   .claude/commands/pensieve-{search,recall,log,file,task,walk,diff}.md`);
   console.log(`  Run "pensieve config" to set your LLM and embedding models.`);
 
   return true;
@@ -104,9 +103,6 @@ export function updateProject(cwd: string, force: boolean): void {
 
   writeClaudeSettings(projectRoot);
   console.log("  ✓ hooks (.claude/settings.json)");
-
-  writeGithubHooks(projectRoot);
-  console.log("  ✓ hooks (.github/hooks/pensieve.json)");
 
   const { written, skipped } = writeSlashCommands(projectRoot, force);
   for (const name of written) console.log(`  ✓ .claude/commands/${name}.md`);
@@ -200,6 +196,39 @@ pensieve search --file $ARGUMENTS
 \`\`\`
 
 Review the output and summarize: which sessions touched this file, what decisions were made, and any patterns or gotchas relevant to working with it now.
+`,
+  ],
+  [
+    "pensieve-task",
+    `Show the current active task and queue:
+
+\`\`\`bash
+pensieve tasks
+\`\`\`
+
+Summarize the active task, what's been done toward it, and what's next in the queue. If no task is active, suggest starting the first queued item.
+`,
+  ],
+  [
+    "pensieve-walk",
+    `Walk session history to catch up on prior work related to: $ARGUMENTS
+
+\`\`\`bash
+pensieve walk --direction both --steps 4
+\`\`\`
+
+Summarize what was discovered, decided, or built across these sessions. Focus on anything directly relevant to what we're working on now.
+`,
+  ],
+  [
+    "pensieve-diff",
+    `Summarize what changed in the project's understanding between two sessions: $ARGUMENTS
+
+\`\`\`bash
+pensieve diff $ARGUMENTS
+\`\`\`
+
+Review the diff output and explain in plain terms what shifted — new decisions made, old assumptions invalidated, scope added or removed.
 `,
   ],
 ];
