@@ -65,7 +65,7 @@ Here is a completed conversation turn:
 {ASSISTANT_TEXT}
 ---
 
-Extract 0-3 memories worth keeping long-term. Only extract:
+Extract (n) memories worth keeping long-term. Only extract:
 - decisions made (e.g. "we decided to use X")
 - tasks created or completed (e.g. "next step: implement Y")
 - open questions or blockers (e.g. "still need to figure out Z")
