@@ -252,6 +252,8 @@ program
   .description("Semantic search across memories, tasks, and sessions")
   .option("-k, --top <n>", "Number of results", "10")
   .option("--file <path>", "Find turns and memories from sessions that referenced this file")
+  .option("--walk", "Show graph traversal from each result")
+  .option("--walk-hops <n>", "Hops for nested walk (default 1)", "1")
   .action(async (query: string | undefined, opts) => {
     const detected = detectProject(process.cwd());
     if (!detected) { cerr("No pensieve project found. Run: pensieve init"); process.exit(1); }
@@ -326,6 +328,10 @@ program
       return;
     }
 
+    const { escape: esc } = await import("./kuzu-helpers.js");
+    const showWalk = opts.walk;
+    const walkHops = Math.max(1, parseInt(opts.walkHops ?? "1", 10));
+
     console.log(`\n${chalk.dim("Query:")} "${chalk.white(query)}"\n`);
 
     for (const r of results) {
@@ -338,16 +344,47 @@ program
           const crumbList = r.breadcrumbs.map((c) => `${chalk.dim(shortId(String(c.id)))} ${(c.kind ?? "memory").toUpperCase()}: ${c.title}`).join("  ·  ");
           console.log(`   ${chalk.dim("↳ also from this session:")} ${chalk.dim(crumbList)}`);
         }
+        if (showWalk) {
+          const seedNode: GraphNode = { id: String(r.id), type: "Memory", label: r.title, properties: { id: r.id, title: r.title, kind: r.kind } };
+          const walks = await walkGraph(conn, seedNode, walkHops, esc);
+          if (walks.length > 1) {
+            console.log(`   ${chalk.cyan("↳ connected to:")}`);
+            for (const walk of walks.slice(1)) {
+              const relStr = walk.relations.length > 0 ? ` [${walk.relations.map((r) => r.type).join(", ")}]` : "";
+              console.log(`      ${chalk.dim("[" + walk.node.type + "]")} ${walk.node.label}${chalk.dim(relStr)}`);
+            }
+          }
+        }
       } else if (r.nodeType === "task") {
         const statusColor = r.status === "active" ? chalk.green : r.status === "blocked" ? chalk.yellow : r.status === "done" ? chalk.dim : chalk.white;
         console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[TASK]")} ${chalk.white(r.title)}  ${statusColor(r.status ?? "")}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.createdAt)}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary)}`);
+        if (showWalk) {
+          const seedNode: GraphNode = { id: String(r.id), type: "Task", label: r.title, properties: { id: r.id, title: r.title, status: r.status } };
+          const walks = await walkGraph(conn, seedNode, walkHops, esc);
+          if (walks.length > 1) {
+            console.log(`   ${chalk.cyan("↳ graph:")}`);
+            for (const walk of walks.slice(1)) {
+              console.log(`      ${chalk.dim("[" + walk.node.type.toUpperCase() + "]")} ${walk.node.label}`);
+            }
+          }
+        }
       } else if (r.nodeType === "turn") {
         console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[TURN]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.createdAt)}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary.slice(0, 120) + (r.summary.length > 120 ? "…" : ""))}`);
       } else {
         console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[SESSION]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.startedAt)}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary.slice(0, 120) + (r.summary.length > 120 ? "…" : ""))}`);
+        if (showWalk) {
+          const seedNode: GraphNode = { id: String(r.id), type: "Session", label: r.title, properties: { id: r.id, title: r.title, startedAt: r.startedAt } };
+          const walks = await walkGraph(conn, seedNode, walkHops, esc);
+          if (walks.length > 1) {
+            console.log(`   ${chalk.cyan("↳ graph:")}`);
+            for (const walk of walks.slice(1)) {
+              console.log(`      ${chalk.dim("[" + walk.node.type.toUpperCase() + "]")} ${walk.node.label}`);
+            }
+          }
+        }
       }
       console.log();
     }
@@ -1744,7 +1781,7 @@ async function walkGraph(
 
     // Check each relationship type from this node
     for (const relType of relTypes) {
-      const queryStr = `MATCH (n {id: '${esc(node.id)}'}) -[:${relType}]->(target)
+      const queryStr = `MATCH (n:${node.type} {id: '${esc(node.id)}'}) -[:${relType}]->(target)
                        RETURN target`;
 
       try {
