@@ -1820,8 +1820,9 @@ memoriesCmd
     listRows.forEach((r) => {
       const m = r["m"] as Record<string, unknown>;
       const ts = m["createdAt"] ? chalk.dim(new Date(String(m["createdAt"])).toLocaleDateString()) : "";
+      const sid = chalk.dim(`[${shortId(String(m["id"]))}]`);
       const kind = chalk.dim("[" + String(m["kind"] ?? "").toUpperCase() + "]");
-      console.log(`  ${kind}  ${chalk.white(String(m["title"] ?? ""))}  ${ts}`);
+      console.log(`  ${sid}  ${kind}  ${chalk.white(String(m["title"] ?? ""))}  ${ts}`);
     });
   });
 
