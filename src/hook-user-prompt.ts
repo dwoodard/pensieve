@@ -14,6 +14,7 @@ import { promoteToDb } from "./promote-memory.js";
 import { readProjectConfig } from "./config.js";
 import { getDb } from "./db.js";
 import { escape, queryAll } from "./kuzu-helpers.js";
+import { llmComplete } from "./llm.js";
 
 interface UserPromptPayload {
   session_id: string;
@@ -59,7 +60,7 @@ async function main(): Promise<void> {
     // Ensure session exists — session-start hook may have already created it
     const sessionId = payload.session_id;
     const existing = await queryAll(conn,
-      `MATCH (s:Session {id: '${escape(sessionId)}'}) RETURN s.id`);
+      `MATCH (s:Session {id: '${escape(sessionId)}'}) RETURN s.title`);
     if (existing.length === 0) {
       const now = new Date().toISOString();
       await conn.query(
@@ -76,6 +77,26 @@ async function main(): Promise<void> {
         `MATCH (p:Project {id: '${escape(config.projectId)}'}), (s:Session {id: '${escape(sessionId)}'})
          CREATE (p)-[:HAS_SESSION]->(s)`
       );
+    } else {
+      // Update session title if it's still the default
+      const currentTitle = existing[0]?.title;
+      if (currentTitle === 'Session Initialization' && config.llm?.model && config.llm.model !== "local-model") {
+        try {
+          // Generate a concise title from the first user message
+          const titlePrompt = `Extract a short, 3-5 word title (max 50 chars) describing what the user is asking about. Only output the title, nothing else.
+
+User message: "${userText.slice(0, 300)}"`;
+          const newTitle = (await llmComplete(titlePrompt)).trim();
+          if (newTitle && newTitle.length > 0 && newTitle.length <= 100) {
+            await conn.query(
+              `MATCH (s:Session {id: '${escape(sessionId)}'})
+               SET s.title = '${escape(newTitle)}'`
+            );
+          }
+        } catch {
+          // If title generation fails, keep the default
+        }
+      }
     }
 
     if (!config.llm?.model || config.llm.model === "local-model") process.exit(0);
