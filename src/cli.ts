@@ -353,6 +353,83 @@ program
   });
 
 program
+  .command("view <nodeId>")
+  .description("View full details of a node by ID (supports short IDs from search output)")
+  .action(async (nodeId: string) => {
+    const detected = detectProject(process.cwd());
+    if (!detected) { cerr("No pensieve project found. Run: pensieve init"); process.exit(1); }
+
+    const projectMemoryDir = path.join(detected.projectRoot, ".pensieve");
+    const config = readProjectConfig(projectMemoryDir);
+    const { conn } = await getDb(projectMemoryDir);
+    await applySchema(conn, projectMemoryDir);
+    const pid = config.projectId;
+    const { escape: esc } = await import("./kuzu-helpers.js");
+
+    // Try to find the node in any table (first exact match, then prefix match)
+    let allRows = await Promise.all([
+      queryAll(conn, `MATCH (m:Memory {projectId: '${esc(pid)}', id: '${esc(nodeId)}'}) RETURN m, 'memory' AS nodeType`),
+      queryAll(conn, `MATCH (t:Task {projectId: '${esc(pid)}', id: '${esc(nodeId)}'}) RETURN t AS m, 'task' AS nodeType`),
+      queryAll(conn, `MATCH (s:Session {projectId: '${esc(pid)}', id: '${esc(nodeId)}'}) RETURN s AS m, 'session' AS nodeType`),
+      queryAll(conn, `MATCH (t:Turn {projectId: '${esc(pid)}', id: '${esc(nodeId)}'}) RETURN t AS m, 'turn' AS nodeType`),
+    ]).then(([m, t, s, tu]) => [...m, ...t, ...s, ...tu]);
+
+    // If no exact match, try prefix match for Memory and Task (which have id: prefixes)
+    if (allRows.length === 0) {
+      const escapedPattern = esc(nodeId);
+      allRows = await Promise.all([
+        queryAll(conn, `MATCH (m:Memory {projectId: '${esc(pid)}'}) WHERE m.id CONTAINS '${escapedPattern}' RETURN m, 'memory' AS nodeType LIMIT 1`),
+        queryAll(conn, `MATCH (t:Task {projectId: '${esc(pid)}'}) WHERE t.id CONTAINS '${escapedPattern}' RETURN t AS m, 'task' AS nodeType LIMIT 1`),
+      ]).then(([m, t]) => [...m, ...t]);
+    }
+
+    if (allRows.length === 0) {
+      console.log(chalk.dim(`No node found with ID: ${nodeId}`));
+      process.exit(1);
+    }
+
+    const row = allRows[0];
+    const nodeType = String(row["nodeType"]);
+    const node = row["m"] as Record<string, unknown>;
+
+    // Format and display the node
+    console.log(`\n${chalk.bold.cyan("─".repeat(60))}`);
+    console.log(`${chalk.bold("[" + nodeType.toUpperCase() + "]")} ${chalk.white(String(node["title"] ?? node["userText"] ?? ""))}`);
+    console.log(`${chalk.bold.cyan("─".repeat(60))}\n`);
+
+    console.log(`${chalk.bold("ID:")} ${chalk.dim(String(node["id"]))}`);
+
+    if (node["kind"]) console.log(`${chalk.bold("Kind:")} ${String(node["kind"])}`);
+    if (node["status"]) console.log(`${chalk.bold("Status:")} ${String(node["status"])}`);
+    if (node["createdAt"]) console.log(`${chalk.bold("Created:")} ${new Date(String(node["createdAt"])).toLocaleString()}`);
+    if (node["timestamp"]) console.log(`${chalk.bold("Timestamp:")} ${new Date(String(node["timestamp"])).toLocaleString()}`);
+    if (node["startedAt"]) console.log(`${chalk.bold("Started:")} ${new Date(String(node["startedAt"])).toLocaleString()}`);
+    if (node["taskOrder"]) console.log(`${chalk.bold("Task Order:")} ${node["taskOrder"]}`);
+
+    console.log();
+
+    if (node["summary"]) {
+      console.log(`${chalk.bold("Summary:")}`);
+      console.log(`${String(node["summary"])}`);
+      console.log();
+    }
+
+    if (node["assistantText"]) {
+      console.log(`${chalk.bold("Assistant Response:")}`);
+      console.log(`${String(node["assistantText"])}`);
+      console.log();
+    }
+
+    if (node["recallCue"]) {
+      console.log(`${chalk.bold("Recall Cue:")}`);
+      console.log(`${String(node["recallCue"])}`);
+      console.log();
+    }
+
+    console.log(`${chalk.bold.cyan("─".repeat(60))}\n`);
+  });
+
+program
   .command("backfill-embeddings")
   .description("Generate and store embeddings for all nodes missing them (Memory, Task, Session, Turn)")
   .action(async () => {
