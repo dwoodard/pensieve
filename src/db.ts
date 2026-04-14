@@ -120,6 +120,7 @@ export async function applySchema(
     `CREATE REL TABLE IF NOT EXISTS RELATED_TO(FROM Memory TO Memory, score FLOAT, createdAt STRING, model STRING)`,
     `CREATE REL TABLE IF NOT EXISTS LINKED(FROM Memory TO Memory, relation STRING, createdAt STRING, note STRING, source STRING, confidence FLOAT, sessionId STRING)`,
     `CREATE REL TABLE IF NOT EXISTS WORKED_ON(FROM Session TO Task, createdAt STRING)`,
+    `CREATE REL TABLE IF NOT EXISTS MENTIONS(FROM Task TO Memory, context STRING, createdAt STRING)`,
   ];
 
   for (const stmt of statements) {
@@ -219,6 +220,17 @@ export async function applySchema(
        CREATE (p)-[:HAS_TASK]->(t)`
     );
   } catch { /* no orphans or table doesn't exist yet */ }
+
+  // Backfill: create MENTIONS edges between Task and Memory nodes in same session
+  try {
+    const now = new Date().toISOString();
+    await conn.query(
+      `MATCH (sess:Session)-[:WORKED_ON]->(t:Task)
+       MATCH (sess)-[:HAS_MEMORY]->(m:Memory)
+       WHERE NOT EXISTS { MATCH (t)-[:MENTIONS]->(m) }
+       CREATE (t)-[:MENTIONS {createdAt: '${escape(now)}'}]->(m)`
+    );
+  } catch { /* no WORKED_ON relationships or edge already exists */ }
 
   // Backfill: create RELATED_TO edges for memories that have none yet
   try {

@@ -1,4 +1,5 @@
 # Graph Exploration & Analysis Results
+
 **Date:** 4/14/2026  
 **Method:** Used `pensieve search "..." --walk` to explore 198 memories across 74 sessions
 
@@ -18,7 +19,9 @@
 ## Key Findings from Graph Walk
 
 ### 1. **The Graph IS Working** ✅
+
 The --walk flag successfully traces relationships between related memories. Example from search:
+
 ```
 [d48f24] Graph schema structure
   ↳ connected to:
@@ -29,6 +32,7 @@ The --walk flag successfully traces relationships between related memories. Exam
 This proves the relationship system is functioning and useful for discovery.
 
 ### 2. **Clear Architectural Decisions Made**
+
 The walk revealed several locked-in decisions:
 
 - **Graph Traversal Implementation** — Walk connected nodes for deeper exploration
@@ -40,12 +44,14 @@ The walk revealed several locked-in decisions:
 These are solid commitments, not speculative.
 
 ### 3. **One Known Blocker**
+
 **"Deployment Visibility and Verification"** (ID: 752ad9, 4/9/2026)
 - User dissatisfied with lack of clear completion verification
 - Wants more "invisible" deployment process
 - Impact: Blocks confidence in system reliability
 
 ### 4. **Technical Debt Acknowledged**
+
 **Infrastructure Coupling** identified as acceptable trade-off:
 - "Speed and flexibility outweigh coupling risks for current stage"
 - Decision made: Proceed with local stack, revisit later if needed
@@ -54,13 +60,15 @@ These are solid commitments, not speculative.
 
 ## What the Walk Revealed About Memory Quality
 
-### Strong Signals:
+### Strong Signals
+
 - **Decision capture**: Explicit architectural choices are recorded and retrievable
 - **Relationship mapping**: Memories properly link to related concepts (RELATED_TO works)
 - **Session context**: Each memory retains session association for provenance
 - **Turn-by-turn capture**: Conversation turns are logged, enabling session replay
 
-### Weak Signals:
+### Weak Signals
+
 - **Turn entries dominate**: Many results return conversation snippets rather than distilled insights
 - **No ranking evidence**: Can't tell from walk which decisions are most important
 - **Schema clarity gaps**: Graph structure (Task-Session relationship) noted as incomplete
@@ -71,6 +79,7 @@ These are solid commitments, not speculative.
 ## Smart Observations from Searching
 
 ### Pattern 1: Decisions Have Dependent Memories
+
 When searching for "deployment visibility", the walk revealed:
 - The blocker (Deployment Visibility)
 - ↳ Related to: Branch Visibility Strategy
@@ -79,12 +88,14 @@ When searching for "deployment visibility", the walk revealed:
 **This shows the system can trace WHY decisions were made** — valuable for context recovery.
 
 ### Pattern 2: Questions & Answers Are Linked
+
 Example: `cb0280 QUESTION: Pensieve Task Branching/Worktrees` appears in same session as related DECISION entries. The walk naturally shows how questions were resolved.
 
 **This enables "how did we decide this?" queries** — powerful for onboarding.
 
 ### Pattern 3: Infrastructure Decisions Documented
-The infrastructure coupling discussion is captured with full rationale ("speed/flexibility trade-off acceptable at this stage"). 
+
+The infrastructure coupling discussion is captured with full rationale ("speed/flexibility trade-off acceptable at this stage").
 
 **This is how you prevent architectural debt creep** — decision rationale is as important as the decision itself.
 
@@ -92,34 +103,37 @@ The infrastructure coupling discussion is captured with full rationale ("speed/f
 
 ## Recommendations Based on Graph Analysis
 
-### Immediate (High Impact):
+### Immediate (High Impact)
+
 1. **Create a "decisions index"** — Mark decisions with category tags (architecture, performance, ux, deployment) so they're retrievable by topic
    - Why: Currently decisions are scattered; would enable "show me all deployment decisions"
-   
+
 2. **Distill turn entries into summaries** — Many TURN entries are long conversation snippets
    - Why: Signal-to-noise ratio hurts search relevance
    - How: Automatic summarization of turns into title + 1-2 sentence summary
-   
+
 3. **Implement task-memory links** — The architecture doc mentions Task nodes but walk shows Task-Session gap
    - Why: Would enable "show me all memories related to active task"
 
-### Medium (2-3 sessions):
+### Medium (2-3 sessions)
+
 4. **Add decision "resolution" status** — Track if decision is implemented, blocked, superseded, or pending
    - Why: Find which decisions are still TODO
    - Current: "Graph Traversal Implementation" is decided but implementation status unknown
 
-5. **Create "exploration paths"** — Preset walks for common questions
-   - Examples: "show me all deployment-related decisions and blockers" 
+2. **Create "exploration paths"** — Preset walks for common questions
+   - Examples: "show me all deployment-related decisions and blockers"
    - Why: Users shouldn't discover the same path twice
 
-6. **Rank memories within a walk** — When walk returns 10 items, order by: importance, recency, relevance
+3. **Rank memories within a walk** — When walk returns 10 items, order by: importance, recency, relevance
    - Why: Last 3 items in a walk are often most useful; would surface them first
 
-### Long-term (Architectural):
+### Long-term (Architectural)
+
 7. **Implement memory promotion pipeline** — The architecture doc defines it; implement scoring/filtering
    - Why: Will reduce noise and improve signal quality dramatically
 
-8. **Add embedding-based similarity within walks** — Not just follow explicit edges, but also "similar but not directly linked" memories
+2. **Add embedding-based similarity within walks** — Not just follow explicit edges, but also "similar but not directly linked" memories
    - Why: Would discover relationships human-created edges miss
 
 ---
@@ -127,10 +141,13 @@ The infrastructure coupling discussion is captured with full rationale ("speed/f
 ## Evidence This System Is Useful
 
 ### Use Case #1: Onboarding a New Team Member
+
 **Scenario:** "Show me all decisions made about the task/branch system"
+
 ```
 pensieve search "task branch hierarchy decision"
 ```
+
 Result: Walks naturally show:
 - Branching Strategy decision
 - Task Hierarchy decision  
@@ -140,12 +157,14 @@ Result: Walks naturally show:
 **Verdict:** Excellent for knowledge transfer. Better than reading a doc.
 
 ### Use Case #2: Unblocking on a Decision
+
 **Scenario:** "Why did we decide X?"
 The architecture doc is sitting in _notes, but the actual decision rationale is captured in memories with session context.
 
 **Verdict:** As long as rationale is captured (as it is), walk provides better context than git history.
 
 ### Use Case #3: Detecting Drift
+
 **Scenario:** "Are we still following our branching strategy?"
 Walk shows the decision + any later discussion of changes or alternatives.
 
