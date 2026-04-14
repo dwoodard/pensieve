@@ -4,6 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import chalk from "chalk";
 import * as net from "net";
+import kuzu from "kuzu";
 import { execSync, spawnSync } from "child_process";
 import { initProject, updateProject } from "./init.js";
 import { ingestTurn } from "./index.js";
@@ -1655,132 +1656,240 @@ memoriesCmd
     console.log(`${chalk.red("Removed")} memory ${chalk.dim(mid.slice(0, 8))}: ${chalk.white(String(match["title"]))}`);
   });
 
+// ── Graph Walk Helpers ──────────────────────────────────────────────────────
+
+interface GraphNode {
+  id: string;
+  label: string;
+  type: string;
+  properties: Record<string, unknown>;
+}
+
+interface WalkResult {
+  node: GraphNode;
+  relations: Array<{
+    type: string;
+    targets: Array<{ node: GraphNode; properties: Record<string, unknown> }>;
+  }>;
+  depth: number;
+  isSeed: boolean;
+}
+
+async function findNodeById(
+  conn: InstanceType<typeof kuzu.Connection>,
+  id: string,
+  esc: (s: string) => string
+): Promise<GraphNode | null> {
+  const nodeTypes = ["Session", "Memory", "Task", "Turn", "Project", "File"];
+
+  // First try to match by ID
+  for (const type of nodeTypes) {
+    const rows = await queryAll(conn,
+      `MATCH (n:${type})
+       WHERE n.id CONTAINS '${esc(id)}'
+       RETURN n LIMIT 1`);
+    if (rows.length > 0) {
+      const node = rows[0]["n"] as Record<string, unknown>;
+      const nodeId = String(node["id"]);
+      return {
+        id: nodeId,
+        type,
+        label: String(node["title"] ?? node["path"] ?? nodeId.slice(0, 8)),
+        properties: node,
+      };
+    }
+  }
+
+  // Then try to match by title (for human-readable names)
+  for (const type of nodeTypes) {
+    const rows = await queryAll(conn,
+      `MATCH (n:${type})
+       WHERE n.title CONTAINS '${esc(id)}'
+       RETURN n LIMIT 1`);
+    if (rows.length > 0) {
+      const node = rows[0]["n"] as Record<string, unknown>;
+      const nodeId = String(node["id"]);
+      return {
+        id: nodeId,
+        type,
+        label: String(node["title"] ?? node["path"] ?? nodeId.slice(0, 8)),
+        properties: node,
+      };
+    }
+  }
+
+  return null;
+}
+
+async function walkGraph(
+  conn: InstanceType<typeof kuzu.Connection>,
+  startNode: GraphNode,
+  hops: number,
+  esc: (s: string) => string
+): Promise<WalkResult[]> {
+  const results: WalkResult[] = [];
+  const visited = new Set<string>();
+  const queue: Array<{ node: GraphNode; depth: number }> = [{ node: startNode, depth: 0 }];
+
+  // All relationship types to check
+  const relTypes = ["HAS_SESSION", "HAS_TASK", "HAS_MEMORY", "HAS_TURN", "REFERENCES", "RELATED_TO", "LINKED", "WORKED_ON"];
+
+  while (queue.length > 0) {
+    const { node, depth } = queue.shift()!;
+    if (visited.has(node.id) || depth > hops) continue;
+    visited.add(node.id);
+
+    const relations: WalkResult["relations"] = [];
+    const byRelType = new Map<string, Array<{ node: GraphNode; properties: Record<string, unknown> }>>();
+
+    // Check each relationship type from this node
+    for (const relType of relTypes) {
+      const queryStr = `MATCH (n {id: '${esc(node.id)}'}) -[:${relType}]->(target)
+                       RETURN target`;
+
+      try {
+        const rows = await queryAll(conn, queryStr);
+        if (rows.length > 0) {
+          if (!byRelType.has(relType)) {
+            byRelType.set(relType, []);
+          }
+
+          for (const row of rows) {
+            const target = row["target"] as Record<string, unknown>;
+            const targetId = String(target["id"]);
+
+            // Detect target type from available fields (check specific fields first)
+            let targetType = "Unknown";
+            if (target["remoteUrl"]) {
+              targetType = "Project";
+            } else if (target["path"] && !target["userText"]) {
+              targetType = "File";
+            } else if (target["kind"]) {
+              targetType = "Memory";
+            } else if (target["status"] && target["taskOrder"] !== undefined) {
+              targetType = "Task";
+            } else if (target["startedAt"]) {
+              targetType = "Session";
+            } else if (target["userText"] || target["assistantText"]) {
+              targetType = "Turn";
+            }
+
+            let label = String(target["title"] ?? target["path"] ?? "");
+            if (targetType === "Turn" && target["userText"]) {
+              label = String(target["userText"]).slice(0, 60);
+            } else if (!label) {
+              label = targetId.slice(0, 8);
+            }
+
+            const targetNode: GraphNode = {
+              id: targetId,
+              type: targetType,
+              label,
+              properties: target,
+            };
+
+            byRelType.get(relType)!.push({ node: targetNode, properties: {} });
+
+            if (depth < hops && !visited.has(targetId)) {
+              queue.push({ node: targetNode, depth: depth + 1 });
+            }
+          }
+        }
+      } catch {
+        // This relationship type may not apply to this node type
+      }
+    }
+
+    for (const [type, targets] of byRelType.entries()) {
+      relations.push({ type, targets });
+    }
+
+    results.push({
+      node,
+      relations,
+      depth,
+      isSeed: depth === 0,
+    });
+  }
+
+  return results;
+}
+
+function formatWalkResults(results: WalkResult[]): void {
+  console.log(`\n${chalk.bold.cyan("── Graph Walk")}\n`);
+
+  for (const result of results) {
+    const depthStr = result.depth > 0 ? chalk.dim(` [depth ${result.depth}]`) : "";
+    const seedStr = result.isSeed ? chalk.bold.white(" ← seed") : "";
+    console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + result.node.type.toUpperCase() + "]")} ${chalk.white(result.node.label)}${depthStr}${seedStr}`);
+
+    // Show key properties
+    const keyProps = ["title", "summary", "status", "createdAt", "startedAt", "kind", "path"];
+    for (const key of keyProps) {
+      if (key in result.node.properties && result.node.properties[key]) {
+        let val = String(result.node.properties[key]);
+        if (key === "summary" || key === "title") val = val.slice(0, 120);
+        if (val) console.log(`   ${chalk.dim(key + ":")} ${val}`);
+      }
+    }
+
+    if (result.relations.length > 0) {
+      console.log(`   ${chalk.dim("→ relations:")}`);
+      for (const rel of result.relations) {
+        console.log(`   ${chalk.cyan(rel.type)} (${rel.targets.length})`);
+        for (const target of rel.targets.slice(0, 3)) {
+          console.log(`      ${chalk.dim("[" + target.node.type.toUpperCase() + "]")} ${target.node.label}`);
+        }
+        if (rel.targets.length > 3) {
+          console.log(`      ${chalk.dim("... and " + (rel.targets.length - 3) + " more")}`);
+        }
+      }
+    }
+    console.log();
+  }
+}
+
 // ── Walk ─────────────────────────────────────────────────────────────────────
 
 program
   .command("walk [id]")
-  .description("Walk session history from a starting point — accepts a session ID or task ID")
-  .option("-d, --direction <dir>", "forward, backward, or both (ignored for task IDs)", "backward")
-  .option("-n, --steps <n>", "Number of steps to walk (ignored for task IDs)", "3")
-  .action(async (id: string | undefined, opts: { direction: string; steps: string }) => {
+  .description("Traverse any node and its connections up to N hops (auto-detects node type)")
+  .option("-n, --hops <n>", "Number of hops to traverse — shows all relation types (default 2)", "2")
+  .action(async (id: string | undefined, opts: { hops: string }) => {
     const { config, conn } = await getProjectDb(process.cwd());
-    const pid = config.projectId;
     const { escape: esc } = await import("./kuzu-helpers.js");
 
-    const steps = Math.max(1, parseInt(opts.steps ?? "3", 10));
-    const dir = (opts.direction ?? "backward").toLowerCase();
+    const hops = Math.max(1, parseInt(opts.hops ?? "2", 10));
 
-    // Check if the ID resolves to a Task node
+    // Find the seed node
+    let seedNode: GraphNode | null = null;
     if (id) {
-      const taskRows = await queryAll(conn,
-        `MATCH (t:Task {projectId: '${esc(pid)}'})
-         WHERE t.id CONTAINS '${esc(id)}'
-         RETURN t LIMIT 1`);
-      if (taskRows.length > 0) {
-        const task = taskRows[0]["t"] as Record<string, unknown>;
-        const tid = String(task["id"]);
-        const tShort = shortId(tid);
-
-        console.log(`\n${chalk.bold.cyan("── Task Walk")} ${chalk.dim("[" + tShort + "]")}\n`);
-        console.log(`${chalk.bold.white(String(task["title"] ?? "(untitled)"))}`);
-        if (task["summary"]) console.log(`${chalk.dim(String(task["summary"]))}`);
-        console.log(`${chalk.dim("status: " + String(task["status"] ?? "unknown"))}`);
-        console.log();
-
-        // Find sessions linked via WORKED_ON edges
-        const linkedRows = await queryAll(conn,
-          `MATCH (s:Session)-[:WORKED_ON]->(t:Task {id: '${esc(tid)}'})
-           RETURN s ORDER BY s.startedAt ASC`);
-
-        if (linkedRows.length === 0) {
-          console.log(chalk.dim("  No sessions linked yet. Links are written at session compaction."));
-          console.log(chalk.dim("  Try: pensieve search \"" + String(task["title"] ?? "").slice(0, 40) + "\""));
-          console.log();
-          return;
-        }
-
-        console.log(chalk.dim(`  ${linkedRows.length} session(s) worked on this task:\n`));
-        for (const r of linkedRows) {
-          const s = r["s"] as Record<string, unknown>;
-          const sid = String(s["id"]);
-          const ts = s["startedAt"] ? new Date(String(s["startedAt"])).toLocaleString() : "unknown";
-          console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + sessionShortId(sid) + "]")} ${chalk.white(String(s["title"] ?? "(untitled)"))}`);
-          console.log(`   ${chalk.dim(ts)}`);
-          if (s["summary"]) console.log(`   ${chalk.dim(String(s["summary"]).slice(0, 160) + (String(s["summary"]).length > 160 ? "…" : ""))}`);
-
-          const memRows = await queryAll(conn,
-            `MATCH (s:Session {id: '${esc(sid)}'})-[:HAS_MEMORY]->(m:Memory)
-             RETURN m ORDER BY m.createdAt ASC`);
-          if (memRows.length > 0) {
-            for (const mr of memRows) {
-              const m = mr["m"] as Record<string, unknown>;
-              console.log(`   ${chalk.dim("[" + String(m["kind"] ?? "memory").toUpperCase() + "]")} ${chalk.dim("[" + shortId(String(m["id"])) + "]")} ${String(m["title"] ?? "")}`);
-            }
-          }
-          console.log();
-        }
-        return;
-      }
-    }
-
-    // Fall through: session-based walk
-    const allRows = await queryAll(conn,
-      `MATCH (p:Project {id: '${esc(pid)}'})-[:HAS_SESSION]->(s:Session)
-       RETURN s ORDER BY s.startedAt ASC`);
-    const allSessions = allRows.map((r) => r["s"] as Record<string, unknown>);
-
-    if (allSessions.length === 0) {
-      console.log(chalk.dim("No sessions found."));
-      return;
-    }
-
-    // Resolve seed session
-    let seedIdx: number;
-    if (id) {
-      seedIdx = allSessions.findIndex((s) => String(s["id"]).includes(id));
-      if (seedIdx === -1) {
-        cerr(`No session or task matching "${id}". Run: pensieve sessions or pensieve tasks`);
+      seedNode = await findNodeById(conn, id, esc);
+      if (!seedNode) {
+        cerr(`No node matching "${id}". Try: pensieve search or pensieve tasks`);
         process.exit(1);
       }
     } else {
-      seedIdx = allSessions.length - 1; // most recent
-    }
-
-    // Slice the walk range
-    let walkSessions: Array<Record<string, unknown>>;
-    if (dir === "forward") {
-      walkSessions = allSessions.slice(seedIdx, seedIdx + steps + 1);
-    } else if (dir === "both") {
-      const back = allSessions.slice(Math.max(0, seedIdx - steps), seedIdx);
-      const fwd = allSessions.slice(seedIdx + 1, seedIdx + steps + 1);
-      walkSessions = [...back, allSessions[seedIdx], ...fwd];
-    } else {
-      // backward (default): seed + N sessions before it
-      walkSessions = allSessions.slice(Math.max(0, seedIdx - steps), seedIdx + 1);
-    }
-
-    console.log(`\n${chalk.bold.cyan("── Walk")} ${chalk.dim("(" + dir + ", " + steps + " steps)")}\n`);
-
-    for (const s of walkSessions) {
-      const sid = String(s["id"]);
-      const isSeed = sid === String(allSessions[seedIdx]["id"]);
-      const ts = s["startedAt"] ? new Date(String(s["startedAt"])).toLocaleString() : "unknown";
-      const marker = isSeed ? chalk.bold.white(" ← seed") : "";
-      console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + sessionShortId(sid) + "]")} ${chalk.white(String(s["title"] ?? "(untitled)"))}${marker}`);
-      console.log(`   ${chalk.dim(ts)}`);
-      if (s["summary"]) console.log(`   ${chalk.dim(String(s["summary"]).slice(0, 160) + (String(s["summary"]).length > 160 ? "…" : ""))}`);
-
-      const memRows = await queryAll(conn,
-        `MATCH (s:Session {id: '${esc(sid)}'})-[:HAS_MEMORY]->(m:Memory)
-         RETURN m ORDER BY m.createdAt ASC`);
-      if (memRows.length > 0) {
-        for (const r of memRows) {
-          const m = r["m"] as Record<string, unknown>;
-          console.log(`   ${chalk.dim("[" + String(m["kind"] ?? "memory").toUpperCase() + "]")} ${String(m["title"] ?? "")}`);
-        }
+      // Default: most recent Memory or Session
+      const recentRows = await queryAll(conn,
+        `MATCH (n:Session)
+         RETURN n ORDER BY n.startedAt DESC LIMIT 1`);
+      if (recentRows.length > 0) {
+        const node = recentRows[0]["n"] as Record<string, unknown>;
+        seedNode = {
+          id: String(node["id"]),
+          type: "Session",
+          label: String(node["title"] ?? ""),
+          properties: node,
+        };
+      } else {
+        cerr("No nodes found to walk from.");
+        process.exit(1);
       }
-      console.log();
     }
+
+    const results = await walkGraph(conn, seedNode, hops, esc);
+    formatWalkResults(results);
   });
 
 // ── Diff ─────────────────────────────────────────────────────────────────────
