@@ -189,6 +189,7 @@ export async function applySchema(
   try { await conn.query(`ALTER TABLE Task ADD branch STRING DEFAULT ''`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Task ADD prUrl STRING DEFAULT ''`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Session ADD embedding FLOAT[] DEFAULT []`); } catch { /* exists */ }
+  try { await conn.query(`ALTER TABLE Memory ADD decisionStatus STRING DEFAULT 'pending'`); } catch { /* exists */ }
 
   // Edge property migrations
   try { await conn.query(`ALTER TABLE HAS_TURN ADD turnIndex INT64 DEFAULT -1`); } catch { /* exists */ }
