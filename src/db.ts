@@ -64,8 +64,10 @@ export async function applySchema(
       id STRING,
       projectId STRING,
       startedAt STRING,
+      endedAt STRING,
       title STRING,
       summary STRING,
+      tags STRING,
       embedding FLOAT[],
       PRIMARY KEY (id)
     )`,
@@ -183,6 +185,9 @@ export async function applySchema(
   try { await conn.query(`ALTER TABLE Memory ADD taskOrder INT64 DEFAULT 0`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Session ADD title STRING DEFAULT ''`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Session ADD archived BOOLEAN DEFAULT false`); } catch { /* exists */ }
+  try { await conn.query(`ALTER TABLE Session ADD endedAt STRING DEFAULT ''`); } catch { /* exists */ }
+  try { await conn.query(`ALTER TABLE Session ADD summary STRING DEFAULT ''`); } catch { /* exists */ }
+  try { await conn.query(`ALTER TABLE Session ADD tags STRING DEFAULT ''`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Memory ADD embedding FLOAT[] DEFAULT []`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Task ADD embedding FLOAT[] DEFAULT []`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Task ADD doneSuggestion STRING DEFAULT ''`); } catch { /* exists */ }

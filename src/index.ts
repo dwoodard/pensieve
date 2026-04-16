@@ -73,8 +73,10 @@ export async function ingestTurn(turn: Turn): Promise<void> {
         id: '${escape(sessionId)}',
         projectId: '${escape(config.projectId)}',
         startedAt: '${new Date().toISOString()}',
+        endedAt: '',
         title: '${escape(title)}',
-        summary: ''
+        summary: '',
+        tags: ''
       })`
     );
     await conn.query(

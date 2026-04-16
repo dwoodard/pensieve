@@ -1924,9 +1924,26 @@ const sessionsCmd = program
 sessionsCmd
   .argument("[id]", "Session id prefix to view in detail")
   .option("--all", "Show archived sessions too")
-  .action(async (id: string | undefined, opts: { all?: boolean }) => {
+  .option("-c, --current", "Show current/most recent session with capture stats")
+  .option("--title <text>", "Update session title")
+  .option("--summarize <text>", "Close session and set summary")
+  .option("--tags <tags>", "Update session tags (comma-separated)")
+  .action(async (id: string | undefined, opts: { all?: boolean; current?: boolean; title?: string; summarize?: string; tags?: string }) => {
     const { config, conn } = await getProjectDb(process.cwd());
     const pid = config.projectId;
+
+    // Current session view with capture stats
+    if (opts.current) {
+      const rows = await queryAll(conn,
+        `MATCH (s:Session {projectId: '${pid}'})
+         RETURN s ORDER BY s.startedAt DESC LIMIT 1`);
+      if (rows.length === 0) {
+        console.log(chalk.dim("No sessions yet."));
+        return;
+      }
+      const s = rows[0]["s"] as Record<string, unknown>;
+      id = String(s["id"]);
+    }
 
     // Detail view
     if (id) {
@@ -1941,14 +1958,92 @@ sessionsCmd
       const ts = match["startedAt"] ? new Date(String(match["startedAt"])).toLocaleString() : "unknown";
       const archived = match["archived"] ? chalk.dim("  [archived]") : "";
 
+      // Update session properties if provided
+      const { escape: esc } = await import("./kuzu-helpers.js");
+      const updates: string[] = [];
+
+      // Handle --summarize (close session + set summary)
+      if (opts.summarize) {
+        const now = new Date().toISOString();
+        updates.push(`s.endedAt = '${esc(now)}'`);
+        updates.push(`s.summary = '${esc(opts.summarize)}'`);
+        match["endedAt"] = now;
+        match["summary"] = opts.summarize;
+      }
+
+      if (opts.title) {
+        updates.push(`s.title = '${esc(opts.title)}'`);
+        match["title"] = opts.title;
+      }
+      if (opts.tags) {
+        updates.push(`s.tags = '${esc(opts.tags)}'`);
+        match["tags"] = opts.tags;
+      }
+
+      if (updates.length > 0) {
+        await conn.query(
+          `MATCH (s:Session {id: '${esc(sid)}'})
+           SET ${updates.join(", ")}`
+        );
+        console.log(chalk.green(`✓ Session updated`));
+      }
+
+      // Compute status dynamically
+      const hasEnded = match["endedAt"] && String(match["endedAt"]).trim().length > 0;
+      const isArchived = match["archived"] ? true : false;
+      let status = "active";
+      let statusColor = chalk.yellow;
+      if (isArchived) {
+        status = "archived";
+        statusColor = chalk.dim;
+      } else if (hasEnded) {
+        status = "completed";
+        statusColor = chalk.green;
+      }
+
       console.log(`\n${chalk.bold.cyan("── Session ──────────────────────────────")}`);
       console.log(`  ID:      ${chalk.dim("[" + sessionShortId(sid) + "]")}  ${chalk.dim(sid)}`);
       console.log(`  Started: ${chalk.dim(ts)}${archived}`);
-      if (match["title"]) console.log(`  Title:   ${chalk.white(String(match["title"]))}`);
+      const endedAt = String(match["endedAt"] || "").trim();
+      if (endedAt) {
+        const endTs = new Date(endedAt).toLocaleString();
+        console.log(`  Ended:   ${chalk.dim(endTs)}`);
+      } else {
+        console.log(`  Ended:   ${chalk.dim("(not set)")}`);
+      }
+      console.log(`  Status:  ${statusColor(status)}`);
+      const titleVal = String(match["title"] || "").trim();
+      console.log(`  Title:   ${titleVal ? chalk.white(titleVal) : chalk.dim("(not set)")}`);
+      const tagsVal = String(match["tags"] || "").trim();
+      if (tagsVal) {
+        const tagList = tagsVal.split(",").map((t) => chalk.cyan(t.trim())).join(", ");
+        console.log(`  Tags:    ${tagList}`);
+      } else {
+        console.log(`  Tags:    ${chalk.dim("(not set)")}`);
+      }
 
-      if (match["summary"]) {
+      const summaryVal = String(match["summary"] || "").trim();
+      if (summaryVal) {
         console.log(`\n${chalk.bold.cyan("── Summary ──────────────────────────────")}`);
-        console.log(chalk.dim(String(match["summary"])));
+        console.log(chalk.dim(summaryVal));
+      } else {
+        console.log(`\n${chalk.bold.cyan("── Summary ──────────────────────────────")}`);
+        console.log(chalk.dim("(not set)"));
+      }
+
+      // Show capture stats
+      const turnRows = await queryAll(conn,
+        `MATCH (s:Session {id: '${sid}'})-[:HAS_TURN]->(t:Turn) RETURN count(t) AS cnt`);
+      const turnCount = Number(turnRows[0]?.["cnt"] ?? 0);
+
+      const taskRows = await queryAll(conn,
+        `MATCH (s:Session {id: '${sid}'})-[:WORKED_ON]->(task:Task) RETURN count(task) AS cnt`);
+      const taskCount = Number(taskRows[0]?.["cnt"] ?? 0);
+
+      if (turnCount > 0 || taskCount > 0) {
+        console.log(`\n${chalk.bold.cyan("── Capture Stats ───────────────────────")}`);
+        if (turnCount > 0) console.log(`  ${chalk.green("✓")} ${turnCount} turn${turnCount !== 1 ? "s" : ""} processed`);
+        if (taskCount > 0) console.log(`  ${chalk.green("✓")} ${taskCount} task${taskCount !== 1 ? "s" : ""} worked on`);
       }
 
       const memRows = await queryAll(conn,
