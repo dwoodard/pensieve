@@ -2788,11 +2788,14 @@ program
 // ─────────────────────────────────────────────────────────────────────────────
 
 const HOOK_SCRIPTS: Record<string, string> = {
-  "stop":           "hook.js",
-  "user-prompt":    "hook-user-prompt.js",
-  "compact":        "hook-compact.js",
-  "post-tool-use":  "hook-post-tool-use.js",
-  "session-start":  "hook-session-start.js",
+  "stop":           "hooks/hook.js",
+  "user-prompt":    "hooks/hook-user-prompt.js",
+  "compact":        "hooks/hook-compact.js",
+  "post-tool-use":  "hooks/hook-post-tool-use.js",
+  "session-start":  "hooks/hook-session-start.js",
+  "session-end":    "hooks/hook-session-end.js",
+  "file-changed":   "hooks/hook-file-changed.js",
+  "post-compact":   "hooks/hook-post-compact.js",
 };
 
 program

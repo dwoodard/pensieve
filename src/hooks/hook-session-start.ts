@@ -7,10 +7,10 @@
 
 import * as fs from "fs";
 import { findProjectMemoryDir } from "./hook-utils.js";
-import { readProjectConfig } from "./config.js";
-import { getDb } from "./db.js";
-import { querySessionBundle } from "./session-bundle.js";
-import { escape, queryAll } from "./kuzu-helpers.js";
+import { readProjectConfig } from "../config.js";
+import { getDb } from "../db.js";
+import { querySessionBundle } from "../session-bundle.js";
+import { escape, queryAll } from "../kuzu-helpers.js";
 
 interface SessionStartPayload {
   session_id: string;
@@ -50,7 +50,7 @@ async function main(): Promise<void> {
           id: '${escape(payload.session_id)}',
           projectId: '${escape(config.projectId)}',
           startedAt: '${escape(now)}',
-          title: 'Session Initialization',
+          title: '',
           summary: '',
           embedding: []
         })`

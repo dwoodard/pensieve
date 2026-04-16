@@ -8,13 +8,13 @@
 
 import * as fs from "fs";
 import { findProjectMemoryDir } from "./hook-utils.js";
-import { readAllCandidates, reviewCandidates, clearCandidates, summarizeSession, reviewTaskCompletion } from "./extract-memory.js";
-import { promoteToDb, getExistingMemories } from "./promote-memory.js";
-import { readProjectConfig } from "./config.js";
-import { getDb } from "./db.js";
-import { readSessionTurns } from "./update-summary.js";
-import { escape, queryAll } from "./kuzu-helpers.js";
-import type { Task } from "./types.js";
+import { readAllCandidates, reviewCandidates, clearCandidates, summarizeSession, reviewTaskCompletion } from "../extract-memory.js";
+import { promoteToDb, getExistingMemories } from "../promote-memory.js";
+import { readProjectConfig } from "../config.js";
+import { getDb } from "../db.js";
+import { readSessionTurns } from "../update-summary.js";
+import { escape, queryAll } from "../kuzu-helpers.js";
+import type { Task } from "../types.js";
 
 interface CompactPayload {
   session_id: string;

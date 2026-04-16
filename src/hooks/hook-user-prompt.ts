@@ -9,12 +9,12 @@
 import * as fs from "fs";
 import * as crypto from "crypto";
 import { findProjectMemoryDir } from "./hook-utils.js";
-import { extractFromUserMessage, writeCandidateFile } from "./extract-memory.js";
-import { promoteToDb } from "./promote-memory.js";
-import { readProjectConfig } from "./config.js";
-import { getDb } from "./db.js";
-import { escape, queryAll } from "./kuzu-helpers.js";
-import { llmComplete } from "./llm.js";
+import { extractFromUserMessage, writeCandidateFile } from "../extract-memory.js";
+import { promoteToDb } from "../promote-memory.js";
+import { readProjectConfig } from "../config.js";
+import { getDb } from "../db.js";
+import { escape, queryAll } from "../kuzu-helpers.js";
+import { llmComplete } from "../llm.js";
 
 interface UserPromptPayload {
   session_id: string;
@@ -68,7 +68,7 @@ async function main(): Promise<void> {
           id: '${escape(sessionId)}',
           projectId: '${escape(config.projectId)}',
           startedAt: '${escape(now)}',
-          title: 'Session Initialization',
+          title: '',
           summary: '',
           embedding: []
         })`
@@ -78,9 +78,9 @@ async function main(): Promise<void> {
          CREATE (p)-[:HAS_SESSION]->(s)`
       );
     } else {
-      // Update session title if it's still the default
+      // Update session title if it's still empty
       const currentTitle = existing[0]?.title;
-      if (currentTitle === 'Session Initialization' && config.llm?.model && config.llm.model !== "local-model") {
+      if (!currentTitle && config.llm?.model && config.llm.model !== "local-model") {
         try {
           // Generate a concise title from the first user message
           const titlePrompt = `Extract a short, 3-5 word title (max 50 chars) describing what the user is asking about. Only output the title, nothing else.

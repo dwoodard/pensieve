@@ -8,14 +8,14 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { ingestTurn, captureSessionSummary } from "./index.js";
+import { ingestTurn, captureSessionSummary } from "../index.js";
 import { findProjectMemoryDir } from "./hook-utils.js";
-import { getDb, applySchema } from "./db.js";
-import { readProjectConfig } from "./config.js";
-import { llmComplete } from "./llm.js";
-import { queryAll } from "./kuzu-helpers.js";
-import { escape as esc } from "./kuzu-helpers.js";
-import type { Turn } from "./types.js";
+import { getDb, applySchema } from "../db.js";
+import { readProjectConfig } from "../config.js";
+import { llmComplete } from "../llm.js";
+import { queryAll } from "../kuzu-helpers.js";
+import { escape as esc } from "../kuzu-helpers.js";
+import type { Turn } from "../types.js";
 
 interface HookPayload {
   session_id: string;
