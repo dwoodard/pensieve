@@ -23,7 +23,8 @@ export interface CandidateMemory {
 
 // ─── Prompts ────────────────────────────────────────────────────────────────
 
-const USER_PROMPT_EXTRACT = `You are a memory extraction system for an AI coding assistant.
+// Default prompts (fallback if .pensieve/ai-prompts/ not available)
+const DEFAULT_USER_PROMPT_EXTRACT = `You are a memory extraction system for an AI coding assistant.
 
 A user just sent this message:
 ---
@@ -56,7 +57,7 @@ If nothing is worth keeping respond with: []
   }
 ]`;
 
-const TURN_EXTRACT_PROMPT = `You are a memory extraction system for an AI coding assistant.
+const DEFAULT_TURN_EXTRACT_PROMPT = `You are a memory extraction system for an AI coding assistant.
 
 Here is a completed conversation turn:
 --- USER ---
@@ -89,7 +90,7 @@ If nothing is worth keeping respond with: []
   }
 ]`;
 
-const COMPACT_REVIEW_PROMPT = `You are a memory vetting system for an AI coding assistant.
+const DEFAULT_COMPACT_REVIEW_PROMPT = `You are a memory vetting system for an AI coding assistant.
 
 Project: {PROJECT_NAME}
 
@@ -124,14 +125,37 @@ Respond with a JSON array. Nothing else.
   }
 ]`;
 
+// ─── Prompt Loading ──────────────────────────────────────────────────────────
+
+/**
+ * Load a prompt from .pensieve/ai-prompts/, fallback to default if not found.
+ * This allows users to edit prompts after init to tune AI behavior.
+ */
+function loadPrompt(promptName: string, defaultPrompt: string, projectRoot?: string): string {
+  try {
+    const root = projectRoot || process.cwd();
+    const promptPath = path.join(root, ".pensieve", "ai-prompts", `${promptName}.md`);
+    if (fs.existsSync(promptPath)) {
+      const content = fs.readFileSync(promptPath, "utf-8");
+      // Extract just the content (skip frontmatter if present)
+      return content.includes("---") ? content.split("---").slice(2).join("---").trim() : content;
+    }
+  } catch {
+    // Silently fall back to default
+  }
+  return defaultPrompt;
+}
+
 // ─── Extraction ──────────────────────────────────────────────────────────────
 
 export async function extractFromUserMessage(
   userText: string,
   sessionId: string,
-  turnId: string
+  turnId: string,
+  projectRoot?: string
 ): Promise<CandidateMemory[]> {
-  const prompt = USER_PROMPT_EXTRACT.replace("{USER_TEXT}", userText);
+  const basePrompt = loadPrompt("memory-extraction-rules", DEFAULT_USER_PROMPT_EXTRACT, projectRoot);
+  const prompt = basePrompt.replace("{USER_TEXT}", userText);
   const response = await llmComplete(prompt);
   return parseCandidates(response, sessionId, turnId);
 }
@@ -140,9 +164,11 @@ export async function extractFromTurn(
   userText: string,
   assistantText: string,
   sessionId: string,
-  turnId: string
+  turnId: string,
+  projectRoot?: string
 ): Promise<CandidateMemory[]> {
-  const prompt = TURN_EXTRACT_PROMPT
+  const basePrompt = loadPrompt("memory-extraction-rules", DEFAULT_TURN_EXTRACT_PROMPT, projectRoot);
+  const prompt = basePrompt
     .replace("{USER_TEXT}", userText)
     .replace("{ASSISTANT_TEXT}", assistantText);
   const response = await llmComplete(prompt);
@@ -152,11 +178,13 @@ export async function extractFromTurn(
 export async function reviewCandidates(
   candidates: CandidateMemory[],
   existingMemories: Memory[],
-  projectName: string
+  projectName: string,
+  projectRoot?: string
 ): Promise<Array<CandidateMemory & { action: "promote" | "merge" | "discard" }>> {
   if (candidates.length === 0) return [];
 
-  const prompt = COMPACT_REVIEW_PROMPT
+  const basePrompt = loadPrompt("memory-extraction-rules", DEFAULT_COMPACT_REVIEW_PROMPT, projectRoot);
+  const prompt = basePrompt
     .replace("{PROJECT_NAME}", projectName)
     .replace("{CANDIDATES}", JSON.stringify(candidates, null, 2))
     .replace("{EXISTING}", existingMemories.length > 0
@@ -205,7 +233,7 @@ export function clearCandidates(projectMemoryDir: string): void {
 
 // ─── Session summarization ───────────────────────────────────────────────────
 
-const SESSION_SUMMARY_PROMPT = `You are a session summarizer for an AI coding assistant.
+const DEFAULT_SESSION_SUMMARY_PROMPT = `You are a session summarizer for an AI coding assistant.
 
 Project: {PROJECT_NAME}
 
@@ -223,11 +251,13 @@ Respond with JSON only. No markdown fences.
 
 export async function summarizeSession(
   rawLog: string,
-  projectName: string
+  projectName: string,
+  projectRoot?: string
 ): Promise<{ title: string; summary: string }> {
   if (!rawLog.trim()) return { title: "", summary: "" };
   const truncatedLog = rawLog.length > 8000 ? rawLog.slice(0, 8000) + "\n...[truncated]" : rawLog;
-  const prompt = SESSION_SUMMARY_PROMPT
+  const basePrompt = loadPrompt("session-summary-rules", DEFAULT_SESSION_SUMMARY_PROMPT, projectRoot);
+  const prompt = basePrompt
     .replace("{PROJECT_NAME}", projectName)
     .replace("{SESSION_LOG}", truncatedLog);
 
@@ -246,7 +276,7 @@ export async function summarizeSession(
 
 // ─── Task completion review ───────────────────────────────────────────────────
 
-const TASK_REVIEW_PROMPT = `You are reviewing a coding session to identify which open tasks it completed.
+const DEFAULT_TASK_REVIEW_PROMPT = `You are reviewing a coding session to identify which open tasks it completed.
 
 Session summary:
 {SUMMARY}
@@ -263,12 +293,14 @@ Return [] if none are clearly done.`;
 
 export async function reviewTaskCompletion(
   summary: string,
-  tasks: Task[]
+  tasks: Task[],
+  projectRoot?: string
 ): Promise<{ id: string; reason: string }[]> {
   if (!summary.trim() || tasks.length === 0) return [];
 
   const taskList = tasks.map((t) => ({ id: t.id, title: t.title, summary: t.summary }));
-  const prompt = TASK_REVIEW_PROMPT
+  const basePrompt = loadPrompt("task-review-rules", DEFAULT_TASK_REVIEW_PROMPT, projectRoot);
+  const prompt = basePrompt
     .replace("{SUMMARY}", summary)
     .replace("{TASKS}", JSON.stringify(taskList, null, 2));
 

@@ -20,6 +20,29 @@ function checkDependencies(): string[] {
   return missing;
 }
 
+function installAIPrompts(projectMemoryDir: string): void {
+  // Find the package root (where docs/ai-prompts/ lives)
+  const packageRoot = path.resolve(path.dirname(__filename), "..");
+  const promptsSourceDir = path.join(packageRoot, "docs", "ai-prompts");
+  const promptsDestDir = path.join(projectMemoryDir, "ai-prompts");
+
+  // Only install if source exists
+  if (!fs.existsSync(promptsSourceDir)) {
+    return; // Silently skip if not found
+  }
+
+  // Create destination directory
+  fs.mkdirSync(promptsDestDir, { recursive: true });
+
+  // Copy all prompt files
+  const files = fs.readdirSync(promptsSourceDir).filter((f) => f.endsWith(".md"));
+  files.forEach((file) => {
+    const src = path.join(promptsSourceDir, file);
+    const dst = path.join(promptsDestDir, file);
+    fs.copyFileSync(src, dst);
+  });
+}
+
 export async function initProject(cwd: string): Promise<boolean> {
   // Use cwd directly as the project root — no git required
   const projectRoot = cwd;
@@ -47,6 +70,9 @@ export async function initProject(cwd: string): Promise<boolean> {
   ]) {
     fs.mkdirSync(dir, { recursive: true });
   }
+
+  // Install AI system prompts from source
+  installAIPrompts(projectMemoryDir);
 
   // Initialize Kuzu and apply schema
   const { conn } = await getDb(projectMemoryDir);
