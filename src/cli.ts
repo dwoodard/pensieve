@@ -2188,6 +2188,73 @@ sessionsCmd
     console.log(`${chalk.red("Removed")} session ${chalk.dim("[" + sessionShortId(sid) + "]")} and its memories.`);
   });
 
+sessionsCmd
+  .command("cleanup")
+  .description("Remove sessions with no turn data (empty sessions)")
+  .action(async () => {
+    const { config, conn } = await getProjectDb(process.cwd());
+    const pid = config.projectId;
+    const path = (await import("path")).default;
+    const fs = (await import("fs")).promises;
+
+    // Find all sessions
+    const rows = await queryAll(conn, `MATCH (s:Session {projectId: '${pid}'}) RETURN s ORDER BY s.startedAt DESC`);
+    const sessions = rows.map((r) => r["s"] as Record<string, unknown>);
+
+    // Check which have turn logs
+    const sessionsDir = path.join(process.cwd(), ".pensieve/sessions");
+    const emptySessionIds: string[] = [];
+
+    for (const session of sessions) {
+      const sid = String(session["id"]);
+      try {
+        const files = await fs.readdir(sessionsDir);
+        const hasTurns = files.some((f) => f.startsWith(sid) && f.endsWith(".jsonl"));
+        if (!hasTurns) {
+          emptySessionIds.push(sid);
+        }
+      } catch {
+        // Directory read error, skip
+      }
+    }
+
+    if (emptySessionIds.length === 0) {
+      console.log(chalk.dim("No empty sessions found."));
+      return;
+    }
+
+    // Display empty sessions
+    console.log(`\n${chalk.yellow("Found")} ${emptySessionIds.length} session(s) with no turn data:\n`);
+    emptySessionIds.forEach((sid) => {
+      const s = sessions.find((sess) => String(sess["id"]) === sid);
+      if (s) {
+        const ts = s["startedAt"] ? new Date(String(s["startedAt"])).toLocaleString() : "unknown";
+        const title = s["title"] ? String(s["title"]) : "(no title)";
+        console.log(`  ${chalk.dim("[" + sessionShortId(sid) + "]")}  ${chalk.dim(ts)}  ${title}`);
+      }
+    });
+
+    // Ask for confirmation
+    const { confirm } = await import("@inquirer/prompts");
+    const ok = await confirm({ message: `\nDelete these ${emptySessionIds.length} empty session(s)?`, default: false });
+    if (!ok) { console.log(chalk.dim("Cancelled.")); return; }
+
+    // Delete them
+    const { escape: esc } = await import("./kuzu-helpers.js");
+    let deleted = 0;
+    for (const sid of emptySessionIds) {
+      try {
+        await conn.query(`MATCH (m:Memory {sessionId: '${esc(sid)}'}) DETACH DELETE m`);
+        await conn.query(`MATCH (s:Session {id: '${esc(sid)}'}) DETACH DELETE s`);
+        deleted++;
+      } catch {
+        // Ignore errors on individual deletions
+      }
+    }
+
+    console.log(`${chalk.green("✓ Cleaned up")} ${deleted} empty session(s).`);
+  });
+
 // ── Memories ──────────────────────────────────────────────────────────────────
 
 const memoriesCmd = program
