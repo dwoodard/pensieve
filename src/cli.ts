@@ -1529,6 +1529,21 @@ tasksCmd
     }
 
     const task = all.find((t) => String(t["id"]) === targetId);
+
+    // Check for linked GitHub issue/PR before deletion
+    const githubIssueId = String(task?.["githubIssueId"] ?? "");
+    const githubPrUrl = String(task?.["githubPrUrl"] ?? "");
+
+    if (githubIssueId || githubPrUrl) {
+      const { confirm } = await import("@inquirer/prompts");
+      let warning = `Task is linked to GitHub:`;
+      if (githubIssueId) warning += `\n  • Issue: #${githubIssueId}`;
+      if (githubPrUrl) warning += `\n  • PR: ${githubPrUrl}`;
+      warning += `\n\nRemove task anyway? (GitHub issue/PR will remain open)`;
+      const ok = await confirm({ message: warning, default: false });
+      if (!ok) { console.log(chalk.dim("Cancelled.")); return; }
+    }
+
     await conn.query(`MATCH (t:Task {id: '${esc(targetId)}'}) DETACH DELETE t`);
     console.log(`${chalk.red("Removed:")} ${task?.["title"]}`);
   });
@@ -1690,6 +1705,84 @@ tasksCmd
     );
     console.log(`${chalk.green("Linked:")} ${task?.["title"]}`);
     console.log(chalk.dim(`  GitHub Issue: #${issueNumber}`));
+  });
+
+tasksCmd
+  .command("info <target>")
+  .description("Show task details and fetch linked GitHub issue/PR if available")
+  .action(async (target: string) => {
+    const { config, conn } = await getProjectDb(process.cwd());
+    const pid = config.projectId;
+
+    const allRows = await queryAll(conn,
+      `MATCH (t:Task {projectId: '${pid}'})
+       RETURN t ORDER BY t.taskOrder ASC`);
+    const all = allRows.map((r) => r["t"] as Record<string, unknown>);
+
+    let targetId: string | undefined;
+    const pos = /^\d+$/.test(target) ? parseInt(target, 10) : NaN;
+    if (!isNaN(pos) && pos >= 1 && pos <= all.length) {
+      targetId = String(all[pos - 1]["id"]);
+    } else {
+      const match = all.find((t) => shortId(String(t["id"])).startsWith(target));
+      targetId = match ? String(match["id"]) : undefined;
+    }
+
+    if (!targetId) {
+      cerr(`No task matching "${target}". Run: pensieve tasks`);
+      process.exit(1);
+    }
+
+    const task = all.find((t) => String(t["id"]) === targetId);
+    if (!task) {
+      cerr("Task not found");
+      process.exit(1);
+    }
+
+    const id = shortId(String(task["id"]));
+    const title = String(task["title"] ?? "");
+    const status = String(task["status"] ?? "");
+    const summary = String(task["summary"] ?? "");
+    const githubIssueId = String(task["githubIssueId"] ?? "");
+    const githubPrUrl = String(task["githubPrUrl"] ?? "");
+
+    console.log(chalk.bold(`\n Task: [${id}] ${title}`));
+    console.log(chalk.dim(`Status: ${status}`));
+    if (summary) {
+      console.log(chalk.dim(`Summary:`));
+      summary.split("\n").forEach((line) => console.log(chalk.dim(`  ${line}`)));
+    }
+
+    // Fetch GitHub issue if linked
+    if (githubIssueId) {
+      console.log(chalk.cyan(`\n GitHub Issue #${githubIssueId}:`));
+      const result = spawnSync("gh", ["issue", "view", githubIssueId, "--json", "title,body,state"], {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      if (result.status === 0) {
+        try {
+          const issueData = JSON.parse(result.stdout ?? "{}") as { title?: string; body?: string; state?: string };
+          console.log(chalk.dim(`  State: ${issueData.state}`));
+          console.log(chalk.dim(`  Title: ${issueData.title}`));
+          if (issueData.body) {
+            console.log(chalk.dim(`  Body:\n${issueData.body.split("\n").map((l) => `    ${l}`).join("\n")}`));
+          }
+        } catch {
+          console.log(chalk.dim(`  (Could not parse issue details)`));
+        }
+      } else {
+        console.log(chalk.dim(`  (Issue not accessible via gh CLI)`));
+      }
+    }
+
+    // Show PR if linked
+    if (githubPrUrl) {
+      console.log(chalk.cyan(`\n GitHub PR: ${githubPrUrl}`));
+    }
+
+    console.log("");
   });
 
 // ── Sessions ─────────────────────────────────────────────────────────────────
