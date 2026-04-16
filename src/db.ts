@@ -124,6 +124,7 @@ export async function applySchema(
     `CREATE REL TABLE IF NOT EXISTS LINKED(FROM Memory TO Memory, relation STRING, createdAt STRING, note STRING, source STRING, confidence FLOAT, sessionId STRING)`,
     `CREATE REL TABLE IF NOT EXISTS WORKED_ON(FROM Session TO Task, createdAt STRING)`,
     `CREATE REL TABLE IF NOT EXISTS MENTIONS(FROM Task TO Memory, context STRING, createdAt STRING)`,
+    `CREATE REL TABLE IF NOT EXISTS CREATED_IN(FROM Task TO Session, createdAt STRING)`,
   ];
 
   for (const stmt of statements) {
@@ -196,6 +197,7 @@ export async function applySchema(
   try { await conn.query(`ALTER TABLE Task ADD prUrl STRING DEFAULT ''`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Task ADD githubPrUrl STRING DEFAULT ''`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Task ADD githubIssueId STRING DEFAULT ''`); } catch { /* exists */ }
+  try { await conn.query(`ALTER TABLE Task ADD createdInSessionId STRING DEFAULT ''`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Session ADD embedding FLOAT[] DEFAULT []`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Memory ADD decisionStatus STRING DEFAULT 'pending'`); } catch { /* exists */ }
   try { await conn.query(`ALTER TABLE Memory ADD statusUpdatedAt STRING DEFAULT ''`); } catch { /* exists */ }

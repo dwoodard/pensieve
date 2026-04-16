@@ -47,6 +47,7 @@ export interface Task {
   taskOrder: number;
   projectId: string;
   createdAt: string;
+  createdInSessionId?: string;
   parentId?: string;
   completedAt?: string;
   completionNote?: string;

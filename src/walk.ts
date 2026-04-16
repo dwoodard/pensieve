@@ -81,6 +81,7 @@ const DEFAULT_RELATIONS = [
   "LINKED",
   "WORKED_ON",
   "MENTIONS",
+  "CREATED_IN",
 ] as const;
 
 const KNOWN_NODE_TYPES = ["Project", "Session", "Task", "Memory", "Turn", "File"] as const;

@@ -1660,7 +1660,16 @@ tasksCmd
     const maxOrder = Number(orderRows[0]?.["maxOrder"] ?? 0);
     const taskOrder = maxOrder + 1;
 
+    // Fetch the most recent session for context
+    const sessionRows = await queryAll(conn,
+      `MATCH (s:Session {projectId: '${pid}'})
+       RETURN s.id AS sessionId, s.startedAt AS startedAt
+       ORDER BY s.startedAt DESC
+       LIMIT 1`);
+    const createdInSessionId = String(sessionRows[0]?.["sessionId"] ?? "");
+
     const id = `task_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const now = new Date().toISOString();
 
     await conn.query(
       `CREATE (t:Task {
@@ -1670,7 +1679,8 @@ tasksCmd
         status: 'pending',
         taskOrder: ${taskOrder},
         projectId: '${esc(pid)}',
-        createdAt: '${new Date().toISOString()}',
+        createdAt: '${now}',
+        createdInSessionId: '${esc(createdInSessionId)}',
         parentId: '${esc(parentId)}'
       })`
     );
@@ -1679,6 +1689,14 @@ tasksCmd
       `MATCH (p:Project {id: '${esc(pid)}'}), (t:Task {id: '${esc(id)}'})
        CREATE (p)-[:HAS_TASK]->(t)`
     );
+
+    // Link task to the session it was created in
+    if (createdInSessionId) {
+      await conn.query(
+        `MATCH (t:Task {id: '${esc(id)}'}), (s:Session {id: '${esc(createdInSessionId)}'})
+         CREATE (t)-[:CREATED_IN {createdAt: '${esc(now)}'}]->(s)`
+      );
+    }
 
     // Best-effort embedding
     embed(title).then((vec) => {
@@ -2124,6 +2142,7 @@ tasksCmd
     const title = String(task["title"] ?? "");
     const status = String(task["status"] ?? "");
     const summary = String(task["summary"] ?? "");
+    const createdInSessionId = String(task["createdInSessionId"] ?? "");
     const githubIssueId = String(task["githubIssueId"] ?? "");
     const githubPrUrl = String(task["githubPrUrl"] ?? "");
 
@@ -2132,6 +2151,23 @@ tasksCmd
     if (summary) {
       console.log(chalk.dim(`Summary:`));
       summary.split("\n").forEach((line) => console.log(chalk.dim(`  ${line}`)));
+    }
+
+    // Show creation session context
+    if (createdInSessionId) {
+      const sessionRows = await queryAll(conn,
+        `MATCH (s:Session {id: '${createdInSessionId}'})
+         RETURN s.title AS title, s.startedAt AS startedAt`);
+      if (sessionRows.length > 0) {
+        const sessionTitle = String(sessionRows[0]?.["title"] ?? "");
+        const sessionTime = String(sessionRows[0]?.["startedAt"] ?? "");
+        console.log(chalk.cyan(`\n Created in session:`));
+        if (sessionTitle) {
+          console.log(chalk.dim(`  "${sessionTitle}"`));
+        }
+        console.log(chalk.dim(`  ${new Date(sessionTime).toLocaleString()}`));
+        console.log(chalk.dim(`  Explore: pensieve walk --start-id task:${id} --depth 2`));
+      }
     }
 
     // Fetch GitHub issue if linked
