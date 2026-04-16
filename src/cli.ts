@@ -947,6 +947,14 @@ function formatTaskTitleWithBranch(task: Record<string, unknown>): string {
   const branch = String(task["branch"] ?? "");
   const prUrl = String(task["prUrl"] ?? "");
   const status = String(task["status"] ?? "");
+  const githubIssueId = String(task["githubIssueId"] ?? "");
+
+  let title = String(task["title"]);
+
+  // Prepend GitHub issue number if linked
+  if (githubIssueId) {
+    title = `${chalk.cyan(`[#${githubIssueId}]`)}  ${title}`;
+  }
 
   if (status === "in-review" && prUrl) {
     // Extract PR number from URL: either #123 or /pull/123
@@ -955,14 +963,14 @@ function formatTaskTitleWithBranch(task: Record<string, unknown>): string {
     const pullMatch = prUrl.match(/\/pull\/(\d+)/);
     if (hashMatch) prNum = hashMatch[1];
     else if (pullMatch) prNum = pullMatch[1];
-    return `${String(task["title"])}  ${chalk.blue(`[PR #${prNum} — awaiting review]`)}`;
+    return `${title}  ${chalk.blue(`[PR #${prNum} — awaiting review]`)}`;
   }
 
   if (branch) {
-    return `→  ${chalk.cyan(branch)}: ${String(task["title"])}`;
+    return `→  ${chalk.cyan(branch)}: ${title}`;
   }
 
-  return String(task["title"]);
+  return title;
 }
 
 function printTaskList(
@@ -1613,6 +1621,42 @@ tasksCmd
     );
     console.log(`${chalk.green("PR recorded:")} ${task?.["title"]}`);
     console.log(chalk.dim(`  ${url}`));
+  });
+
+tasksCmd
+  .command("link <target> <issueNumber>")
+  .description("Link a task to a GitHub Issue by number")
+  .action(async (target: string, issueNumber: string) => {
+    const { config, conn } = await getProjectDb(process.cwd());
+    const pid = config.projectId;
+    const { escape: esc } = await import("./kuzu-helpers.js");
+
+    const allRows = await queryAll(conn,
+      `MATCH (t:Task {projectId: '${pid}'})
+       WHERE t.parentId = '' OR t.parentId IS NULL
+       RETURN t ORDER BY t.taskOrder ASC`);
+    const all = allRows.map((r) => r["t"] as Record<string, unknown>);
+
+    let targetId: string | undefined;
+    const pos = /^\d+$/.test(target) ? parseInt(target, 10) : NaN;
+    if (!isNaN(pos) && pos >= 1 && pos <= all.length) {
+      targetId = String(all[pos - 1]["id"]);
+    } else {
+      const match = all.find((t) => shortId(String(t["id"])).startsWith(target));
+      targetId = match ? String(match["id"]) : undefined;
+    }
+
+    if (!targetId) {
+      cerr(`No task matching "${target}". Run: pensieve tasks`);
+      process.exit(1);
+    }
+
+    const task = all.find((t) => String(t["id"]) === targetId);
+    await conn.query(
+      `MATCH (t:Task {id: '${esc(targetId)}'}) SET t.githubIssueId = '${esc(issueNumber)}'`
+    );
+    console.log(`${chalk.green("Linked:")} ${task?.["title"]}`);
+    console.log(chalk.dim(`  GitHub Issue: #${issueNumber}`));
   });
 
 // ── Sessions ─────────────────────────────────────────────────────────────────

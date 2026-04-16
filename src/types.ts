@@ -55,6 +55,7 @@ export interface Task {
   embedding?: number[];
   branch?: string;
   prUrl?: string;
+  githubIssueId?: string;
 }
 
 export interface Turn {
