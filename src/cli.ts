@@ -951,7 +951,7 @@ function printTaskWithDetails(
   printSubtasks(String(t["id"]), subtasks, subtaskIndent);
 }
 
-function formatTaskTitleWithBranch(task: Record<string, unknown>, ghIssues: Map<string, string> = new Map()): string {
+function formatTaskTitleWithBranch(task: Record<string, unknown>, ghIssues: Map<string, { state: string; title: string }> = new Map()): string {
   const githubPrUrl = String(task["githubPrUrl"] ?? task["prUrl"] ?? "");
   const status = String(task["status"] ?? "");
   const githubIssueId = String(task["githubIssueId"] ?? "");
@@ -960,11 +960,11 @@ function formatTaskTitleWithBranch(task: Record<string, unknown>, ghIssues: Map<
 
   // Prepend GitHub issue number with status if linked
   if (githubIssueId) {
-    const issueStatus = ghIssues.get(githubIssueId);
+    const issueEntry = ghIssues.get(githubIssueId);
     // Show only if status was successfully fetched, otherwise show issue number only
-    if (issueStatus) {
-      const statusIcon = issueStatus === "open" ? "○" : "●";
-      title = `${chalk.cyan(`[#${githubIssueId} ${statusIcon} ${issueStatus}]`)}  ${title}`;
+    if (issueEntry) {
+      const statusIcon = issueEntry.state === "open" ? "○" : "●";
+      title = `${chalk.cyan(`[#${githubIssueId} ${statusIcon} ${issueEntry.state}]`)}  ${title}`;
     } else {
       // Status not fetched (gh CLI unavailable or not linked properly)
       title = `${chalk.dim(`[#${githubIssueId}]`)}  ${title}`;
@@ -984,6 +984,154 @@ function formatTaskTitleWithBranch(task: Record<string, unknown>, ghIssues: Map<
   return title;
 }
 
+function formatTaskDuration(startedAt: unknown): string {
+  if (!startedAt) return "";
+  const started = new Date(String(startedAt));
+  const now = new Date();
+  const minutes = Math.floor((now.getTime() - started.getTime()) / 60000);
+
+  if (minutes < 1) return "just started";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function buildIssueToTaskMap(pending: Record<string, unknown>[]): Map<number, number> {
+  const map = new Map<number, number>();
+  pending.forEach((task, index) => {
+    const issueId = String(task["githubIssueId"] ?? "");
+    if (issueId) {
+      map.set(parseInt(issueId, 10), index + 1);
+    }
+  });
+  return map;
+}
+
+function formatStatusLine(
+  active: Record<string, unknown> | undefined,
+  pendingCount: number,
+  blockedCount: number,
+  issuesCount: number,
+  doneCount: number
+): string {
+  const activeStr = active ? "1" : "0";
+  const parts = [
+    `${activeStr} active`,
+    `${pendingCount} pending`,
+    `${blockedCount} blocked`,
+    `${issuesCount} issues`,
+    `${doneCount} done`
+  ];
+  return `STATUS: ${parts.join(" • ")}`;
+}
+
+function generateWalkCommand(taskId: string, depth: number = 2): string {
+  return `pensieve walk --start-id task:${shortId(taskId)} --depth ${depth} --direction both`;
+}
+
+function printPlanView(
+  active: Record<string, unknown> | undefined,
+  pending: Record<string, unknown>[],
+  blocked: Record<string, unknown>[],
+  done: Record<string, unknown>[],
+  ghIssues: Map<string, { state: string; title: string }> = new Map(),
+  issues: Array<{ number: number; title: string }> = []
+): void {
+  const issueToTaskMap = buildIssueToTaskMap(pending);
+
+  // Separate linked vs unlinked work
+  const linked: Array<{ issue: { number: number; title: string }; task: Record<string, unknown>; queuePos: number }> = [];
+  const unlinked: Array<{ task: Record<string, unknown>; queuePos: number }> = [];
+
+  pending.forEach((task, idx) => {
+    const issueId = String(task["githubIssueId"] ?? "");
+    if (issueId) {
+      const issue = issues.find((i) => String(i.number) === issueId);
+      if (issue) {
+        linked.push({ issue, task, queuePos: idx + 1 });
+      }
+    } else {
+      unlinked.push({ task, queuePos: idx + 1 });
+    }
+  });
+
+  // Header
+  console.log(chalk.bold.cyan(`\nPLANNING VIEW — Strategic Queue Review`));
+  console.log(chalk.dim("═".repeat(80)));
+
+  // Queue Analysis
+  console.log(chalk.bold("\nQUEUE ANALYSIS"));
+  const linkedCount = linked.length;
+  const unlinkedCount = unlinked.length;
+  console.log(
+    `  Total: ${pending.length} pending | ${active ? "1" : "0"} active | ${blocked.length} blocked | ${issues.length} issues | ${done.length} done`
+  );
+  console.log(chalk.dim(`  Structure: ${linkedCount} tasks linked to issues, ${unlinkedCount} unlinked`));
+
+  // Issue-driven work
+  if (linked.length > 0) {
+    console.log(chalk.bold(`\nISSUE-DRIVEN WORK (${linked.length} issues → ${linked.length} tasks)`));
+    console.log(chalk.dim("─".repeat(80)));
+    linked.forEach(({ issue, task, queuePos }) => {
+      const title = String(task["title"] ?? "");
+      console.log(`  ${chalk.magenta("#" + issue.number)}  ${issue.title.slice(0, 60)}`);
+      console.log(`      ↳ [queue: ${queuePos}] ${title.slice(0, 55)}  ${chalk.dim("[" + shortId(String(task["id"])) + "]")}`);
+      console.log(chalk.dim(`      Walk: ${generateWalkCommand(String(task["id"]), 2)}`));
+      console.log("");
+    });
+  }
+
+  // Unlinked work
+  if (unlinked.length > 0) {
+    console.log(chalk.bold(`\nUNLINKED WORK (${unlinked.length} tasks without GitHub issues)`));
+    console.log(chalk.dim("─".repeat(80)));
+
+    // Active task first
+    if (active && !String(active["githubIssueId"] ?? "")) {
+      const title = String(active["title"] ?? "");
+      const duration = formatTaskDuration(active["createdAt"]);
+      console.log(`  ${chalk.green("●")} [ACTIVE] ${title}`);
+      console.log(chalk.dim(`      Status: IN PROGRESS (${duration})`));
+      console.log(chalk.dim(`      Walk: ${generateWalkCommand(String(active["id"]), 3)}`));
+      console.log("");
+    }
+
+    unlinked.forEach(({ task, queuePos }) => {
+      const title = String(task["title"] ?? "");
+      const summary = String(task["summary"] ?? "");
+      console.log(`  [queue: ${queuePos}] ${title}`);
+      if (summary) {
+        console.log(chalk.dim(`      Context: ${summary.slice(0, 50)}${summary.length > 50 ? "..." : ""}`));
+      }
+      console.log(chalk.dim(`      Walk: ${generateWalkCommand(String(task["id"]), 2)}`));
+      console.log("");
+    });
+  }
+
+  // Context navigation help
+  console.log(chalk.bold("\nCONTEXT NAVIGATION (explore task history via graph)"));
+  console.log(chalk.dim("─".repeat(80)));
+  console.log(chalk.dim("  Walk any task to understand its decision context and related work:"));
+  console.log(chalk.dim("    pensieve walk --start-id task:<id> --depth <1-3> --direction both"));
+  console.log(chalk.dim(""));
+  console.log(chalk.dim("  Examples:"));
+  console.log(chalk.dim("    pensieve walk --start-id task:6ad81e --depth 2"));
+  console.log(chalk.dim("    pensieve walk --start-id task:6ad81e --depth 3 --direction both"));
+  console.log("");
+
+  // Next steps
+  console.log(chalk.bold("NEXT STEPS"));
+  console.log(chalk.dim("─".repeat(80)));
+  console.log(chalk.dim("  1. Review this plan — is the queue order correct?"));
+  console.log(chalk.dim("  2. Reorder if needed:  pensieve tasks move <from> <to>"));
+  console.log(chalk.dim("  3. Link issues:  pensieve tasks link <queue> #<issue>"));
+  console.log(chalk.dim("  4. Explore context:  pensieve walk --start-id task:<id> --depth 3"));
+  console.log(chalk.dim("  5. Start working:  pensieve tasks start <queue>  (then use PLAYBOOK.md)"));
+  console.log("");
+}
+
 function printTaskList(
   active: Record<string, unknown> | undefined,
   pending: Record<string, unknown>[],
@@ -992,97 +1140,114 @@ function printTaskList(
   subtasks: Record<string, unknown>[] = [],
   suggestedDone: Record<string, unknown>[] = [],
   inReview: Record<string, unknown>[] = [],
-  ghIssues: Map<string, string> = new Map()
+  ghIssues: Map<string, { state: string; title: string }> = new Map(),
+  issues: Array<{ number: number; title: string }> = []
 ): void {
   if (!active && pending.length === 0 && blocked.length === 0 && done.length === 0 && suggestedDone.length === 0 && inReview.length === 0) {
     console.log("No tasks. Add one: pensieve tasks add \"title\"");
     return;
   }
 
-  // Show legend for status indicators
-  console.log(chalk.dim("  Legend: [#N ○ open] = linked to open issue, [#N] = linked (status unavailable), ✓ = done, ✗ = blocked, ? = suggested done\n"));
+  // Build issue-to-task mapping for showing relationships
+  const issueToTaskMap = buildIssueToTaskMap(pending);
 
-  // Show in-review tasks first
-  if (inReview.length > 0) {
-    console.log(chalk.bold.blue("\n  AWAITING REVIEW"));
-    inReview.forEach((t) => {
-      const githubPrUrl = String(t["githubPrUrl"] ?? t["prUrl"] ?? "");
-      console.log(`  ${chalk.blue("◬")}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${formatTaskTitleWithBranch(t, ghIssues)}`);
-      if (githubPrUrl) console.log(chalk.dim(`        ${githubPrUrl}`));
-    });
-  }
+  // Print header with status summary
+  const statusLine = formatStatusLine(active, pending.length, blocked.length, issues.length, done.length);
+  console.log(chalk.bold.cyan(`\n${statusLine}`));
+  console.log(chalk.dim("═".repeat(Math.min(statusLine.length + 2, 80))));
 
+  // NOW section - active task
   if (active) {
-    const titleLine = `\n${chalk.green("●")} ${chalk.bold.green("ACTIVE")} ${chalk.dim("[" + shortId(String(active["id"])) + "]")}   ${chalk.bold.green(formatTaskTitleWithBranch(active, ghIssues))}`;
-    printTaskWithDetails(
-      active,
-      titleLine,
-      subtasks,
-      "                      ",
-      "       "
-    );
+    console.log(chalk.bold.green("\n● NOW"));
+    const titleFormatted = formatTaskTitleWithBranch(active, ghIssues);
+    console.log(`  ${titleFormatted.padEnd(60)} ${chalk.dim("[" + shortId(String(active["id"])) + "]")}`);
+
+    const summary = String(active["summary"] ?? "");
+    if (summary) {
+      const shortSummary = summary.length > 50 ? summary.slice(0, 50) + "..." : summary;
+      console.log(chalk.dim(`  ↳ ${shortSummary}`));
+    }
+
+    const startedAt = active["createdAt"];
+    if (startedAt) {
+      const duration = formatTaskDuration(startedAt);
+      console.log(chalk.dim(`  ⏱ Started ${duration}`));
+    }
+
+    const subtaskCount = subtasks.filter((s) => String(s["parentId"]) === String(active["id"])).length;
+    if (subtaskCount > 0) {
+      console.log(chalk.dim(`  ⊚ ${subtaskCount} subtask${subtaskCount > 1 ? "s" : ""}`));
+    }
   } else {
-    console.log(chalk.dim("\n  (no active task)"));
+    console.log(chalk.dim("\n(no active task)"));
   }
 
+  // NEXT section - top 5 pending
   if (pending.length > 0) {
-    console.log(chalk.bold("\n  QUEUE"));
-    pending.forEach((t, i) => {
-      const titleLine = `  ${chalk.dim(String(i + 1).padStart(2))}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${formatTaskTitleWithBranch(t, ghIssues)}`;
-      printTaskWithDetails(
-        t,
-        titleLine,
-        subtasks,
-        "        ",
-        "        "
-      );
+    const nextCount = Math.min(5, pending.length);
+    const remaining = pending.length - nextCount;
+    console.log(chalk.bold.yellow(`\n➜ NEXT (${nextCount} of ${pending.length} pending)`));
+
+    pending.slice(0, nextCount).forEach((t, i) => {
+      const taskNum = i + 1;
+      const titleFormatted = formatTaskTitleWithBranch(t, ghIssues);
+      const id = chalk.dim("[" + shortId(String(t["id"])) + "]");
+      console.log(`  ${String(taskNum).padStart(2)}. ${titleFormatted}  ${id}`);
     });
+
+    if (remaining > 0) {
+      console.log(chalk.dim(`  ↳ ${remaining} more pending`));
+    }
   }
 
+  // BLOCKED section - collapsed summary
   if (blocked.length > 0) {
-    console.log(chalk.bold.yellow("\n  BLOCKED"));
-    blocked.forEach((t) => {
-      const titleLine = `  ${chalk.yellow("✗")}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${chalk.yellow(formatTaskTitleWithBranch(t, ghIssues))}`;
-      printTaskWithDetails(
-        t,
-        titleLine,
-        subtasks,
-        "        ",
-        "        "
-      );
+    console.log(chalk.bold.yellow(`\n⚠ BLOCKED (${blocked.length})`));
+    blocked.slice(0, 3).forEach((t) => {
+      console.log(`  ${chalk.yellow("✗")}  ${formatTaskTitleWithBranch(t, ghIssues)}  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}`);
     });
+    if (blocked.length > 3) {
+      console.log(chalk.dim(`  ...and ${blocked.length - 3} more blocked`));
+    }
   }
 
-  if (suggestedDone.length > 0) {
-    console.log(chalk.bold.cyan("\n  MAY BE DONE"));
-    suggestedDone.forEach((t) => {
-      const id = shortId(String(t["id"]));
-      console.log(`  ${chalk.cyan("?")}  ${chalk.dim("[" + id + "]")}  ${chalk.cyan(formatTaskTitleWithBranch(t, ghIssues))}`);
-      if (t["doneSuggestion"]) {
-        console.log(chalk.dim(`         "${String(t["doneSuggestion"]).slice(0, 100)}"`));
+  // OPEN ISSUES section - top 3
+  if (issues.length > 0) {
+    const issueCount = Math.min(3, issues.length);
+    const moreIssues = issues.length - issueCount;
+    console.log(chalk.bold.magenta(`\n◆ OPEN ISSUES (${issues.length})`));
+
+    issues.slice(0, issueCount).forEach((issue) => {
+      let line = `  ${chalk.magenta("#" + issue.number)}  ${issue.title.slice(0, 55)}`;
+      const queuePos = issueToTaskMap.get(issue.number);
+      if (queuePos) {
+        line += `  ${chalk.cyan(`[queue: ${queuePos}]`)}`;
       }
-      console.log(chalk.dim(`         → confirm: pensieve tasks done ${id}`));
+      console.log(line);
     });
+
+    if (moreIssues > 0) {
+      console.log(chalk.dim(`  ↳ ${moreIssues} more issues`));
+    }
   }
 
+  // DONE section - collapsed
   if (done.length > 0) {
-    console.log(chalk.dim("\n  DONE"));
-    done.forEach((t) => {
-      const id = shortId(String(t["id"]));
-      const subCount = subtasks.filter((s) => String(s["parentId"]) === String(t["id"])).length;
-      const subtasksBadge = subCount > 0 ? chalk.dim(` (${subCount} subtask${subCount > 1 ? "s" : ""})`) : "";
-      console.log(chalk.dim(`  ✓  [${id}]${subtasksBadge}  ${formatTaskTitleWithBranch(t, ghIssues)}`));
-    });
+    console.log(chalk.dim(`\n✓ DONE (${done.length})  —  Run: pensieve tasks --done`));
   }
 
+  // Footer with command suggestions
+  console.log(chalk.dim("\nwork:  pensieve tasks start <n> | show <n> | done | block \"why\""));
+  console.log(chalk.dim("manage:  link <n> #issue | update <n> <text> | move <n> <pos> | remove <n>"));
+  console.log(chalk.dim("create:  add \"title\" | summary <n> \"details\" | pr <n> <url>"));
   console.log("");
 }
 
-async function fetchGitHubIssueStatus(): Promise<Map<string, string>> {
-  const issueMap = new Map<string, string>();
+async function fetchGitHubIssueStatus(): Promise<Map<string, { state: string; title: string }>> {
+  const issueMap = new Map<string, { state: string; title: string }>();
   try {
-    // Fetch open issues from GitHub CLI
-    const result = spawnSync("gh", ["issue", "list", "--json", "number,state"], {
+    // Fetch issues from GitHub CLI with title for the --issues flag
+    const result = spawnSync("gh", ["issue", "list", "--json", "number,state,title"], {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -1091,12 +1256,9 @@ async function fetchGitHubIssueStatus(): Promise<Map<string, string>> {
       return issueMap; // Silent fail — GH not available or not authed
     }
 
-    const issues = JSON.parse(result.stdout ?? "[]") as Array<{ number: number; state: string }>;
-    // Store only open issues (filter out closed)
+    const issues = JSON.parse(result.stdout ?? "[]") as Array<{ number: number; state: string; title: string }>;
     issues.forEach((issue) => {
-      if (issue.state === "open") {
-        issueMap.set(String(issue.number), "open");
-      }
+      issueMap.set(String(issue.number), { state: issue.state.toLowerCase(), title: issue.title ?? "" });
     });
   } catch {
     // Silent fail — GH CLI not available or parse error
@@ -1111,6 +1273,8 @@ const tasksCmd = program
 // Default action: list all tasks
 tasksCmd
   .option("--done", "Include completed tasks in the output")
+  .option("--issues", "Show open GitHub issues above task list")
+  .option("--plan", "Strategic planning view with all tasks and context hints")
   .action(async () => {
     const opts = tasksCmd.opts();
     const { config, conn } = await getProjectDb(process.cwd());
@@ -1118,6 +1282,13 @@ tasksCmd
 
     // Fetch GitHub issue status in parallel
     const ghIssues = await fetchGitHubIssueStatus();
+
+    // Build issues list for --issues flag
+    const issuesList = opts.issues || opts.plan
+      ? [...ghIssues.entries()]
+          .filter(([, v]) => v.state === "open")
+          .map(([num, v]) => ({ number: parseInt(num, 10), title: v.title }))
+      : [];
 
     const activeRows = await queryAll(conn,
       `MATCH (m:Task {projectId: '${pid}', status: 'active'})
@@ -1136,7 +1307,7 @@ tasksCmd
        WHERE m.parentId = '' OR m.parentId IS NULL
        RETURN m ORDER BY m.createdAt DESC`);
 
-    const doneRows = opts.done ? await queryAll(conn,
+    const doneRows = (opts.done || opts.plan) ? await queryAll(conn,
       `MATCH (m:Task {projectId: '${pid}', status: 'done'})
        WHERE m.parentId = '' OR m.parentId IS NULL
        RETURN m ORDER BY m.completedAt DESC, m.createdAt DESC`) : [];
@@ -1149,16 +1320,27 @@ tasksCmd
        AND (m.parentId = '' OR m.parentId IS NULL)
        RETURN m ORDER BY m.taskOrder ASC`);
 
-    printTaskList(
-      activeRows[0]?.["m"] as Record<string, unknown> | undefined,
-      pendingRows.map((r) => r["m"] as Record<string, unknown>),
-      blockedRows.map((r) => r["m"] as Record<string, unknown>),
-      doneRows.map((r) => r["m"] as Record<string, unknown>),
-      subtaskRows.map((r) => r["t"] as Record<string, unknown>),
-      suggestedDoneRows.map((r) => r["m"] as Record<string, unknown>),
-      inReviewRows.map((r) => r["m"] as Record<string, unknown>),
-      ghIssues
-    );
+    const active = activeRows[0]?.["m"] as Record<string, unknown> | undefined;
+    const pending = pendingRows.map((r) => r["m"] as Record<string, unknown>);
+    const blocked = blockedRows.map((r) => r["m"] as Record<string, unknown>);
+    const done = doneRows.map((r) => r["m"] as Record<string, unknown>);
+
+    // Render appropriate view
+    if (opts.plan) {
+      printPlanView(active, pending, blocked, done, ghIssues, issuesList);
+    } else {
+      printTaskList(
+        active,
+        pending,
+        blocked,
+        done,
+        subtaskRows.map((r) => r["t"] as Record<string, unknown>),
+        suggestedDoneRows.map((r) => r["m"] as Record<string, unknown>),
+        inReviewRows.map((r) => r["m"] as Record<string, unknown>),
+        ghIssues,
+        issuesList
+      );
+    }
   });
 
 tasksCmd
