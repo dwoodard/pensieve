@@ -339,91 +339,118 @@ program
     const showWalk = opts.walk;
     const walkHops = Math.max(1, parseInt(opts.walkHops ?? "1", 10));
 
-    console.log(`\n${chalk.dim("Query:")} "${chalk.white(query)}"\n`);
-
+    // Group results by type
+    const grouped = {
+      memories: [] as typeof results,
+      tasks: [] as typeof results,
+      sessions: [] as typeof results,
+      turns: [] as typeof results,
+    };
     for (const r of results) {
-      const fmtDate = (d?: string) => d ? chalk.dim(new Date(d).toLocaleString()) : "";
-      if (r.nodeType === "memory") {
-        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[" + (r.kind ?? "memory").toUpperCase() + "]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.createdAt)}`);
-        if (r.summary) console.log(`   ${chalk.dim(r.summary)}`);
-        if (r.sessionTitle) console.log(`   ${chalk.dim("session:")} ${r.sessionTitle}`);
-        if (r.breadcrumbs && r.breadcrumbs.length > 0) {
-          const crumbList = r.breadcrumbs.map((c) => `${chalk.dim(shortId(String(c.id)))} ${(c.kind ?? "memory").toUpperCase()}: ${c.title}`).join("  ·  ");
-          console.log(`   ${chalk.dim("↳ also from this session:")} ${chalk.dim(crumbList)}`);
-        }
-        if (showWalk) {
-          const seedNode: GraphNode = { id: String(r.id), type: "Memory", label: r.title, properties: { id: r.id, title: r.title, kind: r.kind } };
-          const walkOptions: WalkOptions = {
-            depth: walkHops,
-            direction: "both",
-            relations: "any",
-            maxNodes: 100,
-            maxVisited: 500,
-          };
-          const walkResult = await traverseDbGraph(conn, seedNode, walkOptions);
-          if (walkResult.nodes.length > 1) {
-            console.log(`   ${chalk.cyan("↳ nested walk:")}`);
-            for (const walk of walkResult.nodes.slice(1)) {
-              const depthStr = walk.depth > 0 ? chalk.dim(` [d${walk.depth}]`) : "";
-              const relStr = walk.relations.length > 0 ? ` ${chalk.cyan(walk.relations.map((rel) => rel.type).join(", "))}` : "";
-              console.log(`      ${chalk.dim("[" + walk.node.type + "]")} ${walk.node.label}${relStr}${depthStr}`);
-            }
-          }
-        }
-      } else if (r.nodeType === "task") {
-        const statusColor = r.status === "active" ? chalk.green : r.status === "blocked" ? chalk.yellow : r.status === "done" ? chalk.dim : chalk.white;
-        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[TASK]")} ${chalk.white(r.title)}  ${statusColor(r.status ?? "")}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.createdAt)}`);
-        if (r.summary) console.log(`   ${chalk.dim(r.summary)}`);
-        if (showWalk) {
-          const seedNode: GraphNode = { id: String(r.id), type: "Task", label: r.title, properties: { id: r.id, title: r.title, status: r.status } };
-          const walkOptions: WalkOptions = {
-            depth: walkHops,
-            direction: "both",
-            relations: "any",
-            maxNodes: 100,
-            maxVisited: 500,
-          };
-          const walkResult = await traverseDbGraph(conn, seedNode, walkOptions);
-          if (walkResult.nodes.length > 1) {
-            console.log(`   ${chalk.cyan("↳ nested walk:")}`);
-            for (const walk of walkResult.nodes.slice(1)) {
-              const depthStr = walk.depth > 0 ? chalk.dim(` [d${walk.depth}]`) : "";
-              const relStr = walk.relations.length > 0 ? ` ${chalk.cyan(walk.relations.map((rel) => rel.type).join(", "))}` : "";
-              console.log(`      ${chalk.dim("[" + walk.node.type.toUpperCase() + "]")} ${walk.node.label}${relStr}${depthStr}`);
-            }
-          }
-        }
-      } else if (r.nodeType === "turn") {
-        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[TURN]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.createdAt)}`);
-        if (r.summary) console.log(`   ${chalk.dim(r.summary.slice(0, 120) + (r.summary.length > 120 ? "…" : ""))}`);
-      } else {
-        const sShortId = sessionShortId(String(r.id));
-        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + sShortId + "]")} ${chalk.bold("[SESSION]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.startedAt)}`);
-        if (r.summary) console.log(`   ${chalk.dim(r.summary.slice(0, 120) + (r.summary.length > 120 ? "…" : ""))}`);
-        if (r.tags) console.log(`   ${chalk.dim("tags:")} ${r.tags.split(",").map((t: string) => chalk.cyan(t.trim())).join(", ")}`);
-        console.log(`   ${chalk.dim("→")} pensieve sessions ${sShortId} --turns`);
-        if (showWalk) {
-          const seedNode: GraphNode = { id: String(r.id), type: "Session", label: r.title, properties: { id: r.id, title: r.title, startedAt: r.startedAt } };
-          const walkOptions: WalkOptions = {
-            depth: walkHops,
-            direction: "both",
-            relations: "any",
-            maxNodes: 100,
-            maxVisited: 500,
-          };
-          const walkResult = await traverseDbGraph(conn, seedNode, walkOptions);
-          if (walkResult.nodes.length > 1) {
-            console.log(`   ${chalk.cyan("↳ nested walk:")}`);
-            for (const walk of walkResult.nodes.slice(1)) {
-              const depthStr = walk.depth > 0 ? chalk.dim(` [d${walk.depth}]`) : "";
-              const relStr = walk.relations.length > 0 ? ` ${chalk.cyan(walk.relations.map((rel) => rel.type).join(", "))}` : "";
-              console.log(`      ${chalk.dim("[" + walk.node.type.toUpperCase() + "]")} ${walk.node.label}${relStr}${depthStr}`);
-            }
-          }
+      if (r.nodeType === "memory") grouped.memories.push(r);
+      else if (r.nodeType === "task") grouped.tasks.push(r);
+      else if (r.nodeType === "session") grouped.sessions.push(r);
+      else if (r.nodeType === "turn") grouped.turns.push(r);
+    }
+
+    // Print header with result summary
+    const counts = `${grouped.memories.length} memor${grouped.memories.length !== 1 ? "ies" : "y"}  ·  ${grouped.tasks.length} task${grouped.tasks.length !== 1 ? "s" : ""}  ·  ${grouped.sessions.length} session${grouped.sessions.length !== 1 ? "s" : ""}  ·  ${grouped.turns.length} turn${grouped.turns.length !== 1 ? "s" : ""}`;
+    console.log(`\n${chalk.bold.cyan(`Search Results — ${counts}`)}`);
+    console.log(chalk.dim(`Query: "${query}"`));
+    console.log(chalk.dim("═".repeat(Math.min(100, counts.length + 20))));
+
+    const fmtDate = (d?: string) => d ? chalk.dim(new Date(d).toLocaleString()) : "";
+
+    // Render grouped results with sections
+    const maxPerSection = 5;
+    const renderWalk = async (r: typeof results[0]) => {
+      if (!showWalk) return;
+      const nodeType = r.nodeType === "memory" ? "Memory" : r.nodeType === "task" ? "Task" : r.nodeType === "session" ? "Session" : "Turn";
+      const props: Record<string, unknown> = { id: r.id, title: r.title };
+      if (r.status) props.status = r.status;
+      if (r.kind) props.kind = r.kind;
+      if (r.startedAt) props.startedAt = r.startedAt;
+      const seedNode: GraphNode = {
+        id: String(r.id),
+        type: nodeType,
+        label: r.title,
+        properties: props,
+      };
+      const walkOptions: WalkOptions = { depth: walkHops, direction: "both", relations: "any", maxNodes: 100, maxVisited: 500 };
+      const walkResult = await traverseDbGraph(conn, seedNode, walkOptions);
+      if (walkResult.nodes.length > 1) {
+        console.log(`   ${chalk.cyan("↳ context:")}`);
+        for (const walk of walkResult.nodes.slice(1, 4)) {
+          const depthStr = walk.depth > 0 ? chalk.dim(` [d${walk.depth}]`) : "";
+          const relStr = walk.relations.length > 0 ? ` ${chalk.cyan(walk.relations.map((rel) => rel.type).join(", "))}` : "";
+          console.log(`      ${chalk.dim("[" + walk.node.type + "]")} ${walk.node.label}${relStr}${depthStr}`);
         }
       }
-      console.log();
+    };
+
+    // MEMORIES
+    if (grouped.memories.length > 0) {
+      console.log(`\n${chalk.bold.cyan("◆ MEMORIES")} ${chalk.dim("(" + grouped.memories.length + ")")}`);
+      const toShow = grouped.memories.slice(0, maxPerSection);
+      for (const r of toShow) {
+        console.log(`  ${chalk.dim("[" + shortId(String(r.id)) + "]")}  ${chalk.white(r.title)}  ${chalk.dim((r.kind ?? "memory").toUpperCase())}  ${chalk.dim(r.score.toFixed(3))}`);
+        if (r.summary) console.log(`    ${chalk.dim(r.summary.slice(0, 80))}${r.summary.length > 80 ? "…" : ""}`);
+        if (r.sessionTitle) console.log(`    ${chalk.dim("→ " + r.sessionTitle)}`);
+        await renderWalk(r);
+      }
+      if (grouped.memories.length > maxPerSection) {
+        console.log(`  ${chalk.dim("↳ " + (grouped.memories.length - maxPerSection) + " more memories")}`);
+      }
     }
+
+    // TASKS
+    if (grouped.tasks.length > 0) {
+      console.log(`\n${chalk.bold.yellow("◆ TASKS")} ${chalk.dim("(" + grouped.tasks.length + ")")}`);
+      const toShow = grouped.tasks.slice(0, maxPerSection);
+      for (const r of toShow) {
+        const statusColor = r.status === "active" ? chalk.green : r.status === "blocked" ? chalk.yellow : r.status === "done" ? chalk.dim : chalk.white;
+        console.log(`  ${chalk.dim("[" + shortId(String(r.id)) + "]")}  ${chalk.white(r.title)}  ${statusColor(r.status ?? "pending")}  ${chalk.dim(r.score.toFixed(3))}`);
+        if (r.summary) console.log(`    ${chalk.dim(r.summary.slice(0, 80))}${r.summary.length > 80 ? "…" : ""}`);
+        await renderWalk(r);
+      }
+      if (grouped.tasks.length > maxPerSection) {
+        console.log(`  ${chalk.dim("↳ " + (grouped.tasks.length - maxPerSection) + " more tasks")}`);
+      }
+    }
+
+    // SESSIONS
+    if (grouped.sessions.length > 0) {
+      console.log(`\n${chalk.bold.magenta("◆ SESSIONS")} ${chalk.dim("(" + grouped.sessions.length + ")")}`);
+      const toShow = grouped.sessions.slice(0, maxPerSection);
+      for (const r of toShow) {
+        const sShortId = sessionShortId(String(r.id));
+        console.log(`  ${chalk.dim("[" + sShortId + "]")}  ${chalk.white(r.title)}  ${chalk.dim(r.score.toFixed(3))}`);
+        if (r.summary) console.log(`    ${chalk.dim(r.summary.slice(0, 80))}${r.summary.length > 80 ? "…" : ""}`);
+        if (r.tags) console.log(`    ${chalk.dim("tags:")} ${r.tags.split(",").map((t: string) => chalk.cyan(t.trim())).join("  ")}`);
+        await renderWalk(r);
+      }
+      if (grouped.sessions.length > maxPerSection) {
+        console.log(`  ${chalk.dim("↳ " + (grouped.sessions.length - maxPerSection) + " more sessions")}`);
+      }
+    }
+
+    // TURNS
+    if (grouped.turns.length > 0) {
+      console.log(`\n${chalk.bold.blue("◆ TURNS")} ${chalk.dim("(" + grouped.turns.length + ")")}`);
+      const toShow = grouped.turns.slice(0, maxPerSection);
+      for (const r of toShow) {
+        console.log(`  ${chalk.dim("[" + shortId(String(r.id)) + "]")}  ${chalk.white(r.title?.slice(0, 70))}${(r.title?.length ?? 0) > 70 ? "…" : ""}  ${chalk.dim(r.score.toFixed(3))}`);
+        if (r.summary) console.log(`    ${chalk.dim(r.summary.slice(0, 80))}${r.summary.length > 80 ? "…" : ""}`);
+        await renderWalk(r);
+      }
+      if (grouped.turns.length > maxPerSection) {
+        console.log(`  ${chalk.dim("↳ " + (grouped.turns.length - maxPerSection) + " more turns")}`);
+      }
+    }
+
+    // Footer with navigation suggestions
+    console.log(chalk.dim("\nnavigate:  pensieve search \"<query>\" --walk  |  pensieve view <id>  |  pensieve walk --start-id <type>:<id>"));
+    console.log("");
   });
 
 program
@@ -448,13 +475,15 @@ program
       queryAll(conn, `MATCH (t:Turn {projectId: '${esc(pid)}', id: '${esc(nodeId)}'}) RETURN t AS m, 'turn' AS nodeType`),
     ]).then(([m, t, s, tu]) => [...m, ...t, ...s, ...tu]);
 
-    // If no exact match, try prefix match for Memory and Task (which have id: prefixes)
+    // If no exact match, try prefix match across all node types
     if (allRows.length === 0) {
       const escapedPattern = esc(nodeId);
       allRows = await Promise.all([
         queryAll(conn, `MATCH (m:Memory {projectId: '${esc(pid)}'}) WHERE m.id CONTAINS '${escapedPattern}' RETURN m, 'memory' AS nodeType LIMIT 1`),
         queryAll(conn, `MATCH (t:Task {projectId: '${esc(pid)}'}) WHERE t.id CONTAINS '${escapedPattern}' RETURN t AS m, 'task' AS nodeType LIMIT 1`),
-      ]).then(([m, t]) => [...m, ...t]);
+        queryAll(conn, `MATCH (s:Session {projectId: '${esc(pid)}'}) WHERE s.id CONTAINS '${escapedPattern}' RETURN s AS m, 'session' AS nodeType LIMIT 1`),
+        queryAll(conn, `MATCH (t:Turn {projectId: '${esc(pid)}'}) WHERE t.id CONTAINS '${escapedPattern}' RETURN t AS m, 'turn' AS nodeType LIMIT 1`),
+      ]).then(([m, t, s, tu]) => [...m, ...t, ...s, ...tu]);
     }
 
     if (allRows.length === 0) {
@@ -465,42 +494,147 @@ program
     const row = allRows[0];
     const nodeType = String(row["nodeType"]);
     const node = row["m"] as Record<string, unknown>;
+    const fullId = String(node["id"]);
+    const displayId = nodeType === "session" ? sessionShortId(fullId) : nodeType === "memory" ? shortId(fullId) : nodeType === "task" ? shortId(fullId) : shortId(fullId);
 
-    // Format and display the node
-    console.log(`\n${chalk.bold.cyan("─".repeat(60))}`);
-    console.log(`${chalk.bold("[" + nodeType.toUpperCase() + "]")} ${chalk.white(String(node["title"] ?? node["userText"] ?? ""))}`);
-    console.log(`${chalk.bold.cyan("─".repeat(60))}\n`);
+    // Header with node type and title
+    const title = String(node["title"] ?? node["userText"] ?? "(untitled)");
+    const typeColor = nodeType === "memory" ? chalk.cyan : nodeType === "task" ? chalk.yellow : nodeType === "session" ? chalk.magenta : chalk.blue;
+    console.log(`\n${chalk.bold.cyan("── Node ────────────────────────────────────────────────────────")}`);
+    console.log(`  ${typeColor("[" + nodeType.toUpperCase() + "]")}  ${chalk.white(title.slice(0, 70))}${title.length > 70 ? "…" : ""}`);
+    console.log(`  ${chalk.dim("ID:")} ${chalk.dim("[" + displayId + "]")}  ${chalk.dim(fullId)}`);
 
-    console.log(`${chalk.bold("ID:")} ${chalk.dim(String(node["id"]))}`);
+    // Metadata section
+    const metaLines: string[] = [];
+    if (nodeType === "memory" && node["kind"]) metaLines.push(`kind: ${node["kind"]}`);
+    if (nodeType === "task" && node["status"]) metaLines.push(`status: ${node["status"]}`);
+    if (nodeType === "session" && node["startedAt"]) {
+      const started = new Date(String(node["startedAt"])).toLocaleString();
+      metaLines.push(`started: ${started}`);
+      if (node["endedAt"]) {
+        const ended = new Date(String(node["endedAt"])).toLocaleString();
+        metaLines.push(`ended: ${ended}`);
+      } else {
+        metaLines.push("status: active");
+      }
+    }
+    if (nodeType === "turn" && node["timestamp"]) metaLines.push(`timestamp: ${new Date(String(node["timestamp"])).toLocaleString()}`);
+    if (nodeType === "memory" && node["createdAt"]) metaLines.push(`created: ${new Date(String(node["createdAt"])).toLocaleString()}`);
+    if (nodeType === "task" && node["taskOrder"]) metaLines.push(`order: ${node["taskOrder"]}`);
+    if (metaLines.length > 0) {
+      console.log(`  ${chalk.dim(metaLines.join("  ·  "))}`);
+    }
 
-    if (node["kind"]) console.log(`${chalk.bold("Kind:")} ${String(node["kind"])}`);
-    if (node["status"]) console.log(`${chalk.bold("Status:")} ${String(node["status"])}`);
-    if (node["createdAt"]) console.log(`${chalk.bold("Created:")} ${new Date(String(node["createdAt"])).toLocaleString()}`);
-    if (node["timestamp"]) console.log(`${chalk.bold("Timestamp:")} ${new Date(String(node["timestamp"])).toLocaleString()}`);
-    if (node["startedAt"]) console.log(`${chalk.bold("Started:")} ${new Date(String(node["startedAt"])).toLocaleString()}`);
-    if (node["taskOrder"]) console.log(`${chalk.bold("Task Order:")} ${node["taskOrder"]}`);
-
-    console.log();
-
+    // Summary section
     if (node["summary"]) {
-      console.log(`${chalk.bold("Summary:")}`);
-      console.log(`${String(node["summary"])}`);
-      console.log();
+      console.log(`\n${chalk.bold.cyan("── Summary ─────────────────────────────────────────────────────")}`);
+      console.log(chalk.dim(String(node["summary"])));
     }
 
-    if (node["assistantText"]) {
-      console.log(`${chalk.bold("Assistant Response:")}`);
-      console.log(`${String(node["assistantText"])}`);
-      console.log();
+    // Turn-specific content
+    if (nodeType === "turn") {
+      if (node["userText"]) {
+        console.log(`\n${chalk.bold.cyan("── User ────────────────────────────────────────────────────────")}`);
+        console.log(chalk.dim(String(node["userText"])));
+      }
+      if (node["assistantText"]) {
+        console.log(`\n${chalk.bold.cyan("── Assistant ───────────────────────────────────────────────────")}`);
+        console.log(chalk.dim(String(node["assistantText"])));
+      }
     }
 
-    if (node["recallCue"]) {
-      console.log(`${chalk.bold("Recall Cue:")}`);
-      console.log(`${String(node["recallCue"])}`);
-      console.log();
+    // Memory-specific content
+    if (nodeType === "memory" && node["recallCue"]) {
+      console.log(`\n${chalk.bold.cyan("── Recall Cue ──────────────────────────────────────────────────")}`);
+      console.log(chalk.dim(String(node["recallCue"])));
     }
 
-    console.log(`${chalk.bold.cyan("─".repeat(60))}\n`);
+    // Session tags
+    if (nodeType === "session" && node["tags"]) {
+      console.log(`\n${chalk.bold.cyan("── Tags ────────────────────────────────────────────────────────")}`);
+      const tagStr = String(node["tags"]).split(",").map((t: string) => chalk.cyan(t.trim())).join("  ");
+      console.log("  " + tagStr);
+    }
+
+    // Fetch and show connected context
+    let hasContext = false;
+
+    if (nodeType === "turn") {
+      const sessionRows = await queryAll(conn, `MATCH (t:Turn {id: '${esc(fullId)}'}) <-[:HAS_TURN]- (s:Session) RETURN s.id AS sid, s.title AS stitle`);
+      if (sessionRows.length > 0) {
+        hasContext = true;
+        console.log(`\n${chalk.bold.cyan("── Context ─────────────────────────────────────────────────────")}`);
+        for (const r of sessionRows) {
+          const sid = String(r["sid"] || "");
+          const stitle = String(r["stitle"] || "");
+          console.log(`  ${chalk.dim("Session:")} ${chalk.white(stitle)} ${chalk.dim("[" + sessionShortId(sid) + "]")}`);
+        }
+      }
+    } else if (nodeType === "memory") {
+      const sessionRows = await queryAll(conn, `MATCH (m:Memory {id: '${esc(fullId)}'}) <-[:HAS_MEMORY]- (s:Session) RETURN s.id AS sid, s.title AS stitle`);
+      if (sessionRows.length > 0) {
+        hasContext = true;
+        console.log(`\n${chalk.bold.cyan("── Context ─────────────────────────────────────────────────────")}`);
+        for (const r of sessionRows) {
+          const sid = String(r["sid"] || "");
+          const stitle = String(r["stitle"] || "");
+          console.log(`  ${chalk.dim("Session:")} ${chalk.white(stitle)} ${chalk.dim("[" + sessionShortId(sid) + "]")}`);
+        }
+      }
+    } else if (nodeType === "task") {
+      const sessionRows = await queryAll(conn, `MATCH (t:Task {id: '${esc(fullId)}'}) <-[:WORKED_ON]- (s:Session) RETURN s.id AS sid, s.title AS stitle LIMIT 1`);
+      if (sessionRows.length > 0) {
+        hasContext = true;
+        console.log(`\n${chalk.bold.cyan("── Context ─────────────────────────────────────────────────────")}`);
+        for (const r of sessionRows) {
+          const sid = String(r["sid"] || "");
+          const stitle = String(r["stitle"] || "");
+          console.log(`  ${chalk.dim("Worked on in:")} ${chalk.white(stitle)} ${chalk.dim("[" + sessionShortId(sid) + "]")}`);
+        }
+      }
+    } else if (nodeType === "session") {
+      const turnRows = await queryAll(conn, `MATCH (s:Session {id: '${esc(fullId)}'}) -[:HAS_TURN]-> (t:Turn) RETURN count(t) AS cnt`);
+      const memRows = await queryAll(conn, `MATCH (s:Session {id: '${esc(fullId)}'}) -[:HAS_MEMORY]-> (m:Memory) RETURN count(m) AS cnt`);
+      const taskRows = await queryAll(conn, `MATCH (s:Session {id: '${esc(fullId)}'}) -[:WORKED_ON]-> (t:Task) RETURN count(t) AS cnt`);
+      if (turnRows.length > 0 || memRows.length > 0 || taskRows.length > 0) {
+        hasContext = true;
+        console.log(`\n${chalk.bold.cyan("── Content ─────────────────────────────────────────────────────")}`);
+        const parts: string[] = [];
+        if (turnRows.length > 0) {
+          const tcount = Number(turnRows[0]["cnt"] || 0);
+          if (tcount > 0) parts.push(`${tcount} turn${tcount !== 1 ? "s" : ""}`);
+        }
+        if (memRows.length > 0) {
+          const mcount = Number(memRows[0]["cnt"] || 0);
+          if (mcount > 0) parts.push(`${mcount} memor${mcount !== 1 ? "ies" : "y"}`);
+        }
+        if (taskRows.length > 0) {
+          const tcount = Number(taskRows[0]["cnt"] || 0);
+          if (tcount > 0) parts.push(`${tcount} task${tcount !== 1 ? "s" : ""}`);
+        }
+        if (parts.length > 0) console.log(`  ${chalk.dim(parts.join("  ·  "))}`);
+      }
+    }
+
+    // Context Navigation
+    console.log(`\n${chalk.bold.cyan("── Navigation ──────────────────────────────────────────────────")}`);
+    if (nodeType === "turn") {
+      console.log(`  ${chalk.dim("Search:")}   pensieve search "${title.slice(0, 40).replace(/"/g, "")}" --walk`);
+      console.log(`  ${chalk.dim("Walk:")}     pensieve walk --start-id turn:${displayId} --depth 2`);
+    } else if (nodeType === "memory") {
+      console.log(`  ${chalk.dim("Search:")}   pensieve search "${title.slice(0, 40).replace(/"/g, "")}" --walk`);
+      console.log(`  ${chalk.dim("Walk:")}     pensieve walk --start-id memory:${displayId} --depth 2`);
+    } else if (nodeType === "task") {
+      console.log(`  ${chalk.dim("Start:")}    pensieve tasks start ${displayId}`);
+      console.log(`  ${chalk.dim("Update:")}   pensieve tasks update ${displayId} "<text>"`);
+      console.log(`  ${chalk.dim("Walk:")}     pensieve walk --start-id task:${displayId} --depth 2`);
+    } else if (nodeType === "session") {
+      console.log(`  ${chalk.dim("Turns:")}    pensieve sessions ${displayId} --turns`);
+      console.log(`  ${chalk.dim("Similar:")}  pensieve sessions ${displayId} --similar`);
+      console.log(`  ${chalk.dim("Walk:")}     pensieve walk --start-id session:${displayId} --depth 2`);
+    }
+
+    console.log("");
   });
 
 program
