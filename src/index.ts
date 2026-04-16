@@ -127,3 +127,73 @@ export async function ingestTurn(turn: Turn): Promise<void> {
     // Never block on extraction errors
   }
 }
+
+/**
+ * Capture session summary as a Memory node for AI planning context.
+ * Creates a searchable memory node from the session's title and summary,
+ * enabling cross-session AI context retrieval and planning.
+ */
+export async function captureSessionSummary(
+  conn: Awaited<ReturnType<typeof getDb>>["conn"],
+  sessionId: string,
+  projectId: string
+): Promise<void> {
+  try {
+    // Query the session to get its current title and summary
+    const rows = await queryAll(
+      conn,
+      `MATCH (s:Session {id: '${escape(sessionId)}'})
+       RETURN s.title AS title, s.summary AS summary`
+    );
+
+    if (rows.length === 0) return;
+    const { title, summary } = rows[0] as { title: string; summary: string };
+    if (!title || !summary) return;
+
+    // Create a memory ID for the session summary
+    const memoryId = `summary_${sessionId}`;
+
+    // Embed the session summary
+    const embeddingModel = await embed(summary).catch(() => null);
+
+    // Create the Memory node
+    const createQuery = embeddingModel
+      ? `CREATE (m:Memory {
+           id: '${escape(memoryId)}',
+           kind: 'SESSION_SUMMARY',
+           title: '${escape(title)}',
+           summary: '${escape(summary)}',
+           recallCue: '${escape(title.slice(0, 40))}',
+           projectId: '${escape(projectId)}',
+           sessionId: '${escape(sessionId)}',
+           createdAt: '${new Date().toISOString()}',
+           status: '',
+           taskOrder: 0,
+           embedding: [${embeddingModel.join(", ")}]
+         })`
+      : `CREATE (m:Memory {
+           id: '${escape(memoryId)}',
+           kind: 'SESSION_SUMMARY',
+           title: '${escape(title)}',
+           summary: '${escape(summary)}',
+           recallCue: '${escape(title.slice(0, 40))}',
+           projectId: '${escape(projectId)}',
+           sessionId: '${escape(sessionId)}',
+           createdAt: '${new Date().toISOString()}',
+           status: '',
+           taskOrder: 0
+         })`;
+
+    await conn.query(createQuery).catch(() => {});
+
+    // Link the memory to the session
+    await conn
+      .query(
+        `MATCH (s:Session {id: '${escape(sessionId)}'}), (m:Memory {id: '${escape(memoryId)}'})
+       CREATE (s)-[:HAS_MEMORY]->(m)`
+      )
+      .catch(() => {});
+  } catch {
+    // Never block on session summary capture errors
+  }
+}

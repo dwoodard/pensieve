@@ -8,7 +8,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { ingestTurn } from "./index.js";
+import { ingestTurn, captureSessionSummary } from "./index.js";
 import { findProjectMemoryDir } from "./hook-utils.js";
 import { getDb, applySchema } from "./db.js";
 import { readProjectConfig } from "./config.js";
@@ -169,6 +169,19 @@ async function main(): Promise<void> {
 
       lastUserText = userText;
       lastAssistantText = assistantText;
+    }
+
+    // Capture session summary as a Memory node for AI planning context
+    try {
+      const projectMemoryDir3 = findProjectMemoryDir(cwd);
+      if (projectMemoryDir3) {
+        const config = readProjectConfig(projectMemoryDir3);
+        const { conn: conn3 } = await getDb(projectMemoryDir3);
+        await applySchema(conn3, projectMemoryDir3);
+        await captureSessionSummary(conn3, sessionId, config.projectId);
+      }
+    } catch {
+      // Never block on session summary capture
     }
 
     // Optionally update project description based on what happened this session
