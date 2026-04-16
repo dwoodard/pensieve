@@ -79,6 +79,8 @@ export interface TurnNode {
   timestamp: string;
   userText: string;    // first 400 chars of user message
   assistantText: string; // first 400 chars of assistant message
+  summary?: string;
+  summarizedAt?: string;
   embedding?: number[];
 }
 

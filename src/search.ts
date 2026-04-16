@@ -23,6 +23,7 @@ export interface ScoredNode {
   parentId?: string;
   // session-specific
   startedAt?: string;
+  tags?: string;
   // graph-walk context
   sessionTitle?: string;
   sessionSummary?: string;
@@ -79,6 +80,13 @@ async function loadMemories(conn: InstanceType<typeof kuzu.Connection>, projectI
 async function loadTurns(conn: InstanceType<typeof kuzu.Connection>, projectId: string) {
   return queryBuilder(conn)
     .cypher(`MATCH (t:Turn {projectId: $projectId}) WHERE size(t.embedding) > 0 RETURN t`)
+    .param("projectId", projectId)
+    .all();
+}
+
+async function loadSessions(conn: InstanceType<typeof kuzu.Connection>, projectId: string) {
+  return queryBuilder(conn)
+    .cypher(`MATCH (s:Session {projectId: $projectId}) WHERE size(s.embedding) > 0 RETURN s`)
     .param("projectId", projectId)
     .all();
 }
@@ -153,10 +161,11 @@ export async function searchGraph(
   seedK = 4,
   embedFn: (text: string) => Promise<number[]> = embed
 ): Promise<ScoredNode[]> {
-  const [queryVec, memRows, turnRows] = await Promise.all([
+  const [queryVec, memRows, turnRows, sessionRows] = await Promise.all([
     embedFn(query),
     loadMemories(conn, projectId),
     loadTurns(conn, projectId),
+    loadSessions(conn, projectId),
   ]);
 
   const scored: ScoredNode[] = [
@@ -167,6 +176,20 @@ export async function searchGraph(
     ...turnRows.map((r) => {
       const t = r["t"] as TurnNode & { embedding: number[] };
       return turnNode(t, queryVec, recencyScore(t.timestamp));
+    }),
+    ...sessionRows.map((r) => {
+      const s = r["s"] as Session & { embedding: number[]; tags?: string; startedAt: string };
+      return {
+        nodeType: "session" as const,
+        id: s.id,
+        title: (s.title || "(untitled session)").slice(0, 80),
+        summary: s.summary,
+        projectId: s.projectId,
+        score: cosineSimilarity(queryVec, s.embedding) * recencyScore(s.startedAt),
+        startedAt: s.startedAt,
+        tags: s.tags,
+        sessionTitle: s.title,
+      };
     }),
   ];
 
@@ -180,6 +203,7 @@ export async function searchGraph(
   const breadcrumbsBySeed = new Map<string, ScoredNode[]>();
 
   await Promise.all(seeds.map(async (seed) => {
+    if (seed.nodeType !== "memory" && seed.nodeType !== "turn") return;
     const rel = seed.nodeType === "memory" ? "HAS_MEMORY" : "HAS_TURN";
     const nodeLabel = seed.nodeType === "memory" ? "Memory" : "Turn";
 

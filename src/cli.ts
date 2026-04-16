@@ -397,8 +397,11 @@ program
         console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[TURN]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.createdAt)}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary.slice(0, 120) + (r.summary.length > 120 ? "…" : ""))}`);
       } else {
-        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + shortId(String(r.id)) + "]")} ${chalk.bold("[SESSION]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.startedAt)}`);
+        const sShortId = sessionShortId(String(r.id));
+        console.log(`${chalk.bold.cyan("──")} ${chalk.dim("[" + sShortId + "]")} ${chalk.bold("[SESSION]")} ${chalk.white(r.title)}  ${chalk.dim("(score: " + r.score.toFixed(4) + ")")}  ${fmtDate(r.startedAt)}`);
         if (r.summary) console.log(`   ${chalk.dim(r.summary.slice(0, 120) + (r.summary.length > 120 ? "…" : ""))}`);
+        if (r.tags) console.log(`   ${chalk.dim("tags:")} ${r.tags.split(",").map((t: string) => chalk.cyan(t.trim())).join(", ")}`);
+        console.log(`   ${chalk.dim("→")} pensieve sessions ${sShortId} --turns`);
         if (showWalk) {
           const seedNode: GraphNode = { id: String(r.id), type: "Session", label: r.title, properties: { id: r.id, title: r.title, startedAt: r.startedAt } };
           const walkOptions: WalkOptions = {
@@ -943,6 +946,120 @@ function sessionShortId(id: string): string {
   // If nothing was stripped (already a UUID etc.), use the raw id
   const base = stripped.length > 0 && stripped !== id ? stripped : id;
   return base.slice(0, 8);
+}
+
+function formatRelativeTime(dateStr: string): string {
+  if (!dateStr) return "";
+  const diffMs = Date.now() - new Date(dateStr).getTime();
+  if (isNaN(diffMs)) return "";
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffMins < 1) return "just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function formatSessionDuration(startedAt: string, endedAt: string): string {
+  const start = new Date(startedAt).getTime();
+  const end = new Date(endedAt).getTime();
+  if (isNaN(start) || isNaN(end) || end <= start) return "";
+  const mins = Math.floor((end - start) / 60000);
+  if (mins < 1) return "<1m";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem > 0 ? `${hours}h${rem}m` : `${hours}h`;
+}
+
+function getSessionStatus(s: Record<string, unknown>): { label: string; color: (t: string) => string } {
+  if (s["archived"]) return { label: "archived", color: chalk.dim };
+  if (String(s["endedAt"] || "").trim()) return { label: "completed", color: chalk.green };
+  return { label: "active", color: chalk.yellow };
+}
+
+function getRecencyBucket(startedAt: string): "today" | "week" | "older" {
+  if (!startedAt) return "older";
+  const diffMs = Date.now() - new Date(startedAt).getTime();
+  if (diffMs < 86400000) return "today";
+  if (diffMs < 604800000) return "week";
+  return "older";
+}
+
+async function printSessionStats(conn: InstanceType<typeof kuzu.Connection>, pid: string): Promise<void> {
+  const [allRows, turnCountRows, memCountRows] = await Promise.all([
+    queryAll(conn, `MATCH (s:Session {projectId: '${pid}'}) RETURN s`),
+    queryAll(conn, `MATCH (s:Session {projectId: '${pid}'})-[:HAS_TURN]->(t:Turn) RETURN s.id AS sid, count(t) AS cnt`),
+    queryAll(conn, `MATCH (s:Session {projectId: '${pid}'})-[:HAS_MEMORY]->(m:Memory) RETURN s.id AS sid, count(m) AS cnt`),
+  ]);
+
+  const sessions = allRows.map((r) => r["s"] as Record<string, unknown>);
+  const totalActive = sessions.filter((s) => !s["archived"] && !String(s["endedAt"] || "").trim()).length;
+  const totalArchived = sessions.filter((s) => s["archived"]).length;
+  const totalCompleted = sessions.length - totalActive - totalArchived;
+
+  const turnCountMap = new Map<string, number>();
+  for (const r of turnCountRows) turnCountMap.set(String(r["sid"]), Number(r["cnt"] ?? 0));
+  const totalTurns = [...turnCountMap.values()].reduce((a, b) => a + b, 0);
+  const avgTurns = sessions.length > 0 ? (totalTurns / sessions.length).toFixed(1) : "0";
+
+  const memCountMap = new Map<string, number>();
+  for (const r of memCountRows) memCountMap.set(String(r["sid"]), Number(r["cnt"] ?? 0));
+  const totalMems = [...memCountMap.values()].reduce((a, b) => a + b, 0);
+  const avgMems = sessions.length > 0 ? (totalMems / sessions.length).toFixed(1) : "0";
+
+  const tagFreq = new Map<string, number>();
+  for (const s of sessions) {
+    const tags = String(s["tags"] || "").trim();
+    if (tags) {
+      for (const tag of tags.split(",").map((t) => t.trim()).filter(Boolean)) {
+        tagFreq.set(tag, (tagFreq.get(tag) || 0) + 1);
+      }
+    }
+  }
+  const sortedTags = [...tagFreq.entries()].sort((a, b) => b[1] - a[1]);
+
+  const today = new Date();
+  const activityMap = new Map<string, number>();
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    activityMap.set(d.toISOString().slice(0, 10), 0);
+  }
+  for (const s of sessions) {
+    const key = String(s["startedAt"] || "").slice(0, 10);
+    if (activityMap.has(key)) activityMap.set(key, (activityMap.get(key) || 0) + 1);
+  }
+
+  console.log(`\n${chalk.bold.cyan("SESSION STATS")}`);
+  console.log(chalk.dim("═".repeat(60)));
+  console.log(`\n  Total:     ${chalk.white(sessions.length + " sessions")}    ${chalk.dim(`(${totalActive} active  ·  ${totalCompleted} completed  ·  ${totalArchived} archived)`)}`);
+  console.log(`  Turns:     ${chalk.white(totalTurns + " total")}      ${chalk.dim(`(avg ${avgTurns} per session)`)}`);
+  console.log(`  Memories:  ${chalk.white(totalMems + " total")}       ${chalk.dim(`(avg ${avgMems} per session)`)}`);
+
+  if (sortedTags.length > 0) {
+    const maxCount = sortedTags[0][1];
+    const barWidth = 18;
+    console.log(`\n${chalk.bold.cyan("TAG BREAKDOWN")}`);
+    for (const [tag, count] of sortedTags) {
+      const pct = Math.round((count / sessions.length) * 100);
+      const bars = Math.round((count / maxCount) * barWidth);
+      console.log(`  ${chalk.cyan(tag.padEnd(16))}  ${chalk.dim("●".repeat(bars).padEnd(barWidth))}  ${count} session${count !== 1 ? "s" : ""}  ${chalk.dim("(" + pct + "%)")}`);
+    }
+  }
+
+  const maxActivity = Math.max(...activityMap.values(), 1);
+  console.log(`\n${chalk.bold.cyan("ACTIVITY (last 14 days)")}`);
+  for (const [dateKey, count] of activityMap.entries()) {
+    const bars = count > 0 ? Math.max(1, Math.round((count / maxActivity) * 12)) : 0;
+    const isToday = dateKey === today.toISOString().slice(0, 10);
+    const label = isToday ? "today" : dateKey.slice(5);
+    const barStr = bars > 0 ? chalk.cyan("█".repeat(bars)) : chalk.dim("·");
+    console.log(`  ${chalk.dim(label.padStart(5))}  ${barStr}  ${count > 0 ? chalk.white(String(count)) : chalk.dim("0")} session${count !== 1 ? "s" : ""}`);
+  }
+  console.log("");
 }
 
 function printSubtasks(parentId: string, subtasks: Record<string, unknown>[], indent: string): void {
@@ -1923,47 +2040,54 @@ const sessionsCmd = program
 
 sessionsCmd
   .argument("[id]", "Session id prefix to view in detail")
-  .option("--all", "Show archived sessions too")
-  .option("-c, --current", "Show current/most recent session with capture stats")
+  .option("--all", "Show all sessions including archived")
+  .option("-c, --current", "Show current/most recent session")
+  .option("--limit <n>", "Max sessions to show in list (default 20)", "20")
+  .option("--tag <tag>", "Filter by tag")
+  .option("--group-by-tag", "Group list by tag")
+  .option("--status <status>", "Filter by status: active|completed|archived")
+  .option("--since <date>", "Show sessions since date (e.g. 2026-04-01)")
+  .option("--before <date>", "Show sessions before date")
+  .option("--turns", "Show turns (list: last 3 per session; detail: all turns)")
+  .option("--stream", "Stream all turns from recent sessions")
+  .option("--stats", "Show aggregate session statistics")
+  .option("--similar", "Show sessions similar to this one (detail view)")
   .option("--title <text>", "Update session title")
   .option("--summarize <text>", "Close session and set summary")
   .option("--tags <tags>", "Update session tags (comma-separated)")
   .option("--backfill", "Re-generate title, summary, and tags from session turns")
-  .action(async (id: string | undefined, opts: { all?: boolean; current?: boolean; title?: string; summarize?: string; tags?: string; backfill?: boolean }) => {
+  .action(async (id: string | undefined, opts: {
+    all?: boolean; current?: boolean; limit?: string; tag?: string;
+    groupByTag?: boolean; status?: string; since?: string; before?: string;
+    turns?: boolean; stream?: boolean; stats?: boolean; similar?: boolean;
+    title?: string; summarize?: string; tags?: string; backfill?: boolean;
+  }) => {
     const { config, conn } = await getProjectDb(process.cwd());
     const pid = config.projectId;
+    const { escape: esc } = await import("./kuzu-helpers.js");
 
-    // Current session view with capture stats
-    if (opts.current) {
+    if (opts.current && !id) {
       const rows = await queryAll(conn,
-        `MATCH (s:Session {projectId: '${pid}'})
-         RETURN s ORDER BY s.startedAt DESC LIMIT 1`);
-      if (rows.length === 0) {
-        console.log(chalk.dim("No sessions yet."));
-        return;
-      }
-      const s = rows[0]["s"] as Record<string, unknown>;
-      id = String(s["id"]);
+        `MATCH (s:Session {projectId: '${pid}'}) RETURN s ORDER BY s.startedAt DESC LIMIT 1`);
+      if (rows.length === 0) { console.log(chalk.dim("No sessions yet.")); return; }
+      id = String((rows[0]["s"] as Record<string, unknown>)["id"]);
     }
 
-    // Detail view
+    // ── STATS VIEW ────────────────────────────────────────────────────
+    if (opts.stats && !id) {
+      await printSessionStats(conn, pid);
+      return;
+    }
+
+    // ── DETAIL VIEW ───────────────────────────────────────────────────
     if (id) {
       const rows = await queryAll(conn, `MATCH (s:Session {projectId: '${pid}'}) RETURN s`);
       const sessions = rows.map((r) => r["s"] as Record<string, unknown>);
-      const match = sessions.find((s) => String(s["id"]).includes(id));
-      if (!match) {
-        cerr(`No session matching "${id}". Run: pensieve sessions`);
-        process.exit(1);
-      }
+      const match = sessions.find((s) => String(s["id"]).includes(id!));
+      if (!match) { cerr(`No session matching "${id}". Run: pensieve sessions`); process.exit(1); }
       const sid = String(match["id"]);
-      const ts = match["startedAt"] ? new Date(String(match["startedAt"])).toLocaleString() : "unknown";
-      const archived = match["archived"] ? chalk.dim("  [archived]") : "";
-
-      // Update session properties if provided
-      const { escape: esc } = await import("./kuzu-helpers.js");
       const updates: string[] = [];
 
-      // Handle --backfill (re-generate title, summary, tags from session turns)
       if (opts.backfill) {
         const { readSessionTurns } = await import("./update-summary.js");
         const { summarizeSession } = await import("./extract-memory.js");
@@ -1971,145 +2095,289 @@ sessionsCmd
         if (rawLog && config.llm?.model && config.llm.model !== "local-model") {
           try {
             const { title, summary, tags } = await summarizeSession(rawLog, config.projectName);
-            if (title) {
-              updates.push(`s.title = '${esc(title)}'`);
-              match["title"] = title;
-            }
-            if (summary) {
-              updates.push(`s.summary = '${esc(summary)}'`);
-              match["summary"] = summary;
-            }
-            if (tags) {
-              updates.push(`s.tags = '${esc(tags)}'`);
-              match["tags"] = tags;
-            }
+            if (title) { updates.push(`s.title = '${esc(title)}'`); match["title"] = title; }
+            if (summary) { updates.push(`s.summary = '${esc(summary)}'`); match["summary"] = summary; }
+            if (tags) { updates.push(`s.tags = '${esc(tags)}'`); match["tags"] = tags; }
+            const embedText = [title, summary, tags].filter(Boolean).join(". ");
+            if (embedText) embed(embedText).then((v) => conn.query(`MATCH (s:Session {id: '${esc(sid)}'}) SET s.embedding = [${v.join(",")}]`).catch(() => {})).catch(() => {});
             console.log(chalk.green("✓ Generated title, summary, and tags"));
-          } catch (e) {
-            cerr(`Failed to backfill session: ${e}`);
-          }
-        } else {
-          cerr("Cannot backfill: no LLM configured or using local model");
+          } catch (e) { cerr(`Failed to backfill session: ${e}`); }
+        } else { cerr("Cannot backfill: no LLM configured or using local model"); }
+      }
+      if (opts.summarize) {
+        const now = new Date().toISOString();
+        updates.push(`s.endedAt = '${esc(now)}'`, `s.summary = '${esc(opts.summarize)}'`);
+        match["endedAt"] = now; match["summary"] = opts.summarize;
+      }
+      if (opts.title) { updates.push(`s.title = '${esc(opts.title)}'`); match["title"] = opts.title; }
+      if (opts.tags) { updates.push(`s.tags = '${esc(opts.tags)}'`); match["tags"] = opts.tags; }
+      if (updates.length > 0) {
+        await conn.query(`MATCH (s:Session {id: '${esc(sid)}'}) SET ${updates.join(", ")}`);
+        console.log(chalk.green("✓ Session updated"));
+      }
+
+      const startedAt = String(match["startedAt"] || "");
+      const endedAt = String(match["endedAt"] || "").trim();
+      const titleVal = String(match["title"] || "").trim();
+      const tagsVal = String(match["tags"] || "").trim();
+      const summaryVal = String(match["summary"] || "").trim();
+      const { label: statusLabel, color: statusColor } = getSessionStatus(match);
+      const sId = sessionShortId(sid);
+      const duration = endedAt && startedAt ? formatSessionDuration(startedAt, endedAt) : "";
+
+      const [turnDetailRows, taskDetailRows, memDetailRows, fileDetailRows] = await Promise.all([
+        queryAll(conn, `MATCH (s:Session {id: '${esc(sid)}'})-[r:HAS_TURN]->(t:Turn) RETURN t, r.turnIndex AS idx ORDER BY r.turnIndex ASC`),
+        queryAll(conn, `MATCH (s:Session {id: '${esc(sid)}'})-[:WORKED_ON]->(t:Task) RETURN t`),
+        queryAll(conn, `MATCH (s:Session {id: '${esc(sid)}'})-[:HAS_MEMORY]->(m:Memory) RETURN m ORDER BY m.createdAt ASC`),
+        queryAll(conn, `MATCH (s:Session {id: '${esc(sid)}'})-[:HAS_TURN]->(t:Turn)-[:REFERENCES]->(f:File) RETURN DISTINCT f.path AS fp`),
+      ]);
+
+      console.log(`\n${chalk.bold.cyan("── Session ──────────────────────────────────────────────────────")}`);
+      console.log(`  ${chalk.dim("ID:")}      ${chalk.dim("[" + sId + "]")}  ${chalk.dim(sid)}`);
+      const startStr = startedAt ? new Date(startedAt).toLocaleString() : "unknown";
+      const endStr = endedAt ? new Date(endedAt).toLocaleString() : chalk.dim("(in progress)");
+      const durStr = duration ? chalk.dim("  +" + duration) : "";
+      console.log(`  ${chalk.dim("Started:")} ${chalk.dim(startStr)}   ${chalk.dim("Ended:")} ${endStr}${durStr}`);
+      console.log(`  ${chalk.dim("Status:")}  ${statusColor(statusLabel)}`);
+      console.log(`  ${chalk.dim("Title:")}   ${titleVal ? chalk.white(titleVal) : chalk.dim("(not set)")}`);
+      if (tagsVal) {
+        console.log(`  ${chalk.dim("Tags:")}    ${tagsVal.split(",").map((t) => chalk.cyan(t.trim())).join("  ")}`);
+      }
+
+      console.log(`\n${chalk.bold.cyan("── Summary ──────────────────────────────────────────────────────")}`);
+      console.log(summaryVal ? chalk.dim(summaryVal) : chalk.dim("(not set)"));
+
+      const tCount = turnDetailRows.length;
+      const mCount = memDetailRows.length;
+      const wCount = taskDetailRows.length;
+      const fCount = fileDetailRows.length;
+      if (tCount + mCount + wCount + fCount > 0) {
+        console.log(`\n${chalk.bold.cyan("── Work ─────────────────────────────────────────────────────────")}`);
+        const parts: string[] = [];
+        if (tCount > 0) parts.push(`${chalk.green("✓")} ${tCount} turn${tCount !== 1 ? "s" : ""}`);
+        if (mCount > 0) parts.push(`${chalk.green("✓")} ${mCount} memor${mCount !== 1 ? "ies" : "y"}`);
+        if (wCount > 0) parts.push(`${chalk.green("✓")} ${wCount} task${wCount !== 1 ? "s" : ""} worked on`);
+        if (fCount > 0) parts.push(`${chalk.green("✓")} ${fCount} file${fCount !== 1 ? "s" : ""} referenced`);
+        console.log("  " + parts.join("  ·  "));
+      }
+
+      if (wCount > 0) {
+        console.log(`\n${chalk.bold.cyan("── Tasks Worked On ──────────────────────────────────────────────")}`);
+        for (const r of taskDetailRows) {
+          const t = r["t"] as Record<string, unknown>;
+          const tStatus = String(t["status"] || "");
+          const tColor = tStatus === "done" ? chalk.green : tStatus === "blocked" ? chalk.yellow : chalk.dim;
+          console.log(`  ${chalk.dim("[" + shortId(String(t["id"])) + "]")}  ${chalk.white(String(t["title"]))}  ${tColor(tStatus)}`);
         }
       }
 
-      // Handle --summarize (close session + set summary)
-      if (opts.summarize) {
-        const now = new Date().toISOString();
-        updates.push(`s.endedAt = '${esc(now)}'`);
-        updates.push(`s.summary = '${esc(opts.summarize)}'`);
-        match["endedAt"] = now;
-        match["summary"] = opts.summarize;
+      if (opts.turns && tCount > 0) {
+        console.log(`\n${chalk.bold.cyan(`── Turns  (${tCount}) ────────────────────────────────────────────`)}`);
+        for (const r of turnDetailRows) {
+          const t = r["t"] as Record<string, unknown>;
+          const idx = Number(r["idx"] ?? 0);
+          const tTime = t["timestamp"] ? new Date(String(t["timestamp"])).toLocaleTimeString() : "";
+          const uText = String(t["userText"] || "").slice(0, 100);
+          const aText = String(t["assistantText"] || "").slice(0, 100);
+          console.log(`\n  ${chalk.dim("[" + idx + "]")}  ${chalk.dim(tTime)}`);
+          if (uText) console.log(`    ${chalk.dim("User:")}   ${uText}${String(t["userText"] || "").length > 100 ? "…" : ""}`);
+          if (aText) console.log(`    ${chalk.dim("Asst:")}   ${aText}${String(t["assistantText"] || "").length > 100 ? "…" : ""}`);
+        }
+        console.log("");
       }
 
-      if (opts.title) {
-        updates.push(`s.title = '${esc(opts.title)}'`);
-        match["title"] = opts.title;
-      }
-      if (opts.tags) {
-        updates.push(`s.tags = '${esc(opts.tags)}'`);
-        match["tags"] = opts.tags;
-      }
-
-      if (updates.length > 0) {
-        await conn.query(
-          `MATCH (s:Session {id: '${esc(sid)}'})
-           SET ${updates.join(", ")}`
-        );
-        console.log(chalk.green(`✓ Session updated`));
-      }
-
-      // Compute status dynamically
-      const hasEnded = match["endedAt"] && String(match["endedAt"]).trim().length > 0;
-      const isArchived = match["archived"] ? true : false;
-      let status = "active";
-      let statusColor = chalk.yellow;
-      if (isArchived) {
-        status = "archived";
-        statusColor = chalk.dim;
-      } else if (hasEnded) {
-        status = "completed";
-        statusColor = chalk.green;
-      }
-
-      console.log(`\n${chalk.bold.cyan("── Session ──────────────────────────────")}`);
-      console.log(`  ID:      ${chalk.dim("[" + sessionShortId(sid) + "]")}  ${chalk.dim(sid)}`);
-      console.log(`  Started: ${chalk.dim(ts)}${archived}`);
-      const endedAt = String(match["endedAt"] || "").trim();
-      if (endedAt) {
-        const endTs = new Date(endedAt).toLocaleString();
-        console.log(`  Ended:   ${chalk.dim(endTs)}`);
-      } else {
-        console.log(`  Ended:   ${chalk.dim("(not set)")}`);
-      }
-      console.log(`  Status:  ${statusColor(status)}`);
-      const titleVal = String(match["title"] || "").trim();
-      console.log(`  Title:   ${titleVal ? chalk.white(titleVal) : chalk.dim("(not set)")}`);
-      const tagsVal = String(match["tags"] || "").trim();
-      if (tagsVal) {
-        const tagList = tagsVal.split(",").map((t) => chalk.cyan(t.trim())).join(", ");
-        console.log(`  Tags:    ${tagList}`);
-      } else {
-        console.log(`  Tags:    ${chalk.dim("(not set)")}`);
-      }
-
-      const summaryVal = String(match["summary"] || "").trim();
-      if (summaryVal) {
-        console.log(`\n${chalk.bold.cyan("── Summary ──────────────────────────────")}`);
-        console.log(chalk.dim(summaryVal));
-      } else {
-        console.log(`\n${chalk.bold.cyan("── Summary ──────────────────────────────")}`);
-        console.log(chalk.dim("(not set)"));
-      }
-
-      // Show capture stats
-      const turnRows = await queryAll(conn,
-        `MATCH (s:Session {id: '${sid}'})-[:HAS_TURN]->(t:Turn) RETURN count(t) AS cnt`);
-      const turnCount = Number(turnRows[0]?.["cnt"] ?? 0);
-
-      const taskRows = await queryAll(conn,
-        `MATCH (s:Session {id: '${sid}'})-[:WORKED_ON]->(task:Task) RETURN count(task) AS cnt`);
-      const taskCount = Number(taskRows[0]?.["cnt"] ?? 0);
-
-      if (turnCount > 0 || taskCount > 0) {
-        console.log(`\n${chalk.bold.cyan("── Capture Stats ───────────────────────")}`);
-        if (turnCount > 0) console.log(`  ${chalk.green("✓")} ${turnCount} turn${turnCount !== 1 ? "s" : ""} processed`);
-        if (taskCount > 0) console.log(`  ${chalk.green("✓")} ${taskCount} task${taskCount !== 1 ? "s" : ""} worked on`);
-      }
-
-      const memRows = await queryAll(conn,
-        `MATCH (s:Session {id: '${sid}'})-[:HAS_MEMORY]->(m:Memory)
-         RETURN m ORDER BY m.createdAt ASC`);
-      if (memRows.length > 0) {
-        console.log(`\n${chalk.bold.cyan("── Memories ─────────────────────────────")}`);
-        memRows.forEach((r) => {
+      if (mCount > 0) {
+        console.log(`\n${chalk.bold.cyan("── Memories ─────────────────────────────────────────────────────")}`);
+        for (const r of memDetailRows) {
           const m = r["m"] as Record<string, unknown>;
           console.log(`  ${chalk.dim("[" + String(m["kind"]).toUpperCase() + "]")} ${chalk.white(String(m["title"]))}`);
-          if (m["summary"]) console.log(`    ${chalk.dim(String(m["summary"]))}`);
-        });
+          const ms = String(m["summary"] || "").trim();
+          if (ms) console.log(`    ${chalk.dim(ms)}`);
+        }
       } else {
-        console.log(chalk.dim("\n  No memories for this session."));
+        console.log(chalk.dim("\n  No memories captured."));
       }
+
+      if (opts.similar) {
+        const { cosineSimilarity: cosSim } = await import("./search.js");
+        const sessionEmb = match["embedding"] as number[] | undefined;
+        if (sessionEmb && sessionEmb.length > 0) {
+          const simRows = await queryAll(conn,
+            `MATCH (s:Session {projectId: '${pid}'}) WHERE size(s.embedding) > 0 RETURN s`);
+          const scored = simRows
+            .map((r) => { const s = r["s"] as Record<string, unknown>; return { s, score: cosSim(sessionEmb, s["embedding"] as number[]) }; })
+            .filter((x) => String(x.s["id"]) !== sid)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 5);
+          if (scored.length > 0) {
+            console.log(`\n${chalk.bold.cyan("── Similar Sessions ─────────────────────────────────────────────")}`);
+            for (const { s, score } of scored) {
+              const simTitle = String(s["title"] || "(untitled)").slice(0, 50);
+              const simTime = s["startedAt"] ? formatRelativeTime(String(s["startedAt"])) : "";
+              console.log(`  ${chalk.dim("[" + sessionShortId(String(s["id"])) + "]")}  ${chalk.white(simTitle)}  ${chalk.dim(simTime)}  ${chalk.dim("(" + score.toFixed(3) + ")")}`);
+            }
+          }
+        } else {
+          console.log(chalk.dim("\n  No embedding — run: pensieve sessions " + sId + " --backfill"));
+        }
+      }
+
+      console.log(`\n${chalk.bold.cyan("── Context Navigation ───────────────────────────────────────────")}`);
+      console.log(`  ${chalk.dim("Walk:")}    pensieve walk --start-id session:${sId} --depth 2`);
+      if (titleVal) console.log(`  ${chalk.dim("Search:")}  pensieve search "${titleVal.slice(0, 30).replace(/"/g, "")}" --walk`);
+      if (!opts.turns && tCount > 0) console.log(`  ${chalk.dim("Turns:")}   pensieve sessions ${sId} --turns`);
+      if (!opts.similar) console.log(`  ${chalk.dim("Similar:")} pensieve sessions ${sId} --similar`);
       console.log("");
       return;
     }
 
-    // List view
-    const filter = opts.all ? "" : " AND (s.archived = false OR s.archived IS NULL)";
-    const listRows = await queryAll(conn,
-      `MATCH (s:Session {projectId: '${pid}'})
-       WHERE true${filter}
-       RETURN s ORDER BY s.startedAt DESC`);
-    if (listRows.length === 0) {
-      console.log(opts.all ? "No sessions." : "No active sessions. Use --all to include archived.");
+    // ── LIST VIEW ─────────────────────────────────────────────────────
+    const clauses: string[] = [`s.projectId = '${pid}'`];
+    if (!opts.all) clauses.push("(s.archived = false OR s.archived IS NULL)");
+    if (opts.status === "active") clauses.push("(s.endedAt = '' OR s.endedAt IS NULL) AND (s.archived = false OR s.archived IS NULL)");
+    else if (opts.status === "completed") clauses.push("s.endedAt <> '' AND s.endedAt IS NOT NULL AND (s.archived = false OR s.archived IS NULL)");
+    else if (opts.status === "archived") clauses.push("s.archived = true");
+    if (opts.since) clauses.push(`s.startedAt >= '${new Date(opts.since).toISOString()}'`);
+    if (opts.before) clauses.push(`s.startedAt <= '${new Date(opts.before).toISOString()}'`);
+
+    let sessions = (await queryAll(conn,
+      `MATCH (s:Session) WHERE ${clauses.join(" AND ")} RETURN s ORDER BY s.startedAt DESC`
+    )).map((r) => r["s"] as Record<string, unknown>);
+
+    if (opts.tag) {
+      const ft = opts.tag.toLowerCase().trim();
+      sessions = sessions.filter((s) => String(s["tags"] || "").toLowerCase().split(",").map((t) => t.trim()).includes(ft));
+    }
+
+    if (sessions.length === 0) {
+      console.log(opts.all ? "No sessions found." : "No sessions. Use --all to include archived.");
       return;
     }
-    listRows.forEach((r) => {
-      const s = r["s"] as Record<string, unknown>;
-      const ts = s["startedAt"] ? new Date(String(s["startedAt"])).toLocaleString() : "unknown";
-      const title = s["title"] ? `  ${s["title"]}` : "";
-      const archived = s["archived"] ? chalk.dim("  [archived]") : "";
-      console.log(`  ${chalk.dim("[" + sessionShortId(String(s["id"])) + "]")}  ${chalk.dim(ts)}${chalk.white(title)}${archived}`);
-    });
+
+    const [turnCountRows, memCountRows, allCountRows] = await Promise.all([
+      queryAll(conn, `MATCH (s:Session {projectId: '${pid}'})-[:HAS_TURN]->(t:Turn) RETURN s.id AS sid, count(t) AS cnt`),
+      queryAll(conn, `MATCH (s:Session {projectId: '${pid}'})-[:HAS_MEMORY]->(m:Memory) RETURN s.id AS sid, count(m) AS cnt`),
+      queryAll(conn, `MATCH (s:Session {projectId: '${pid}'}) RETURN s`),
+    ]);
+    const turnCounts = new Map(turnCountRows.map((r) => [String(r["sid"]), Number(r["cnt"] ?? 0)]));
+    const memCounts = new Map(memCountRows.map((r) => [String(r["sid"]), Number(r["cnt"] ?? 0)]));
+    const allS = allCountRows.map((r) => r["s"] as Record<string, unknown>);
+    const nActive = allS.filter((s) => !s["archived"] && !String(s["endedAt"] || "").trim()).length;
+    const nArchived = allS.filter((s) => s["archived"]).length;
+    const nCompleted = allS.length - nActive - nArchived;
+
+    const limit = opts.all ? sessions.length : parseInt(opts.limit ?? "20", 10);
+    const displayed = sessions.slice(0, limit);
+    const hidden = sessions.length - displayed.length;
+
+    // ── STREAM ────────────────────────────────────────────────────────
+    if (opts.stream) {
+      console.log(`\n${chalk.bold.cyan(`STREAM — ${displayed.length} session${displayed.length !== 1 ? "s" : ""}`)}`);
+      console.log(chalk.dim("═".repeat(70)));
+      for (const s of displayed) {
+        const sid2 = String(s["id"]);
+        const sTitle = String(s["title"] || "(untitled)");
+        const sTime = s["startedAt"] ? new Date(String(s["startedAt"])).toLocaleString() : "";
+        const sTags = String(s["tags"] || "").trim();
+        const tagStr = sTags ? "  ·  " + sTags.split(",").map((t) => chalk.cyan(t.trim())).join(", ") : "";
+        console.log(`\n${chalk.bold("━━")} ${chalk.dim("[" + sessionShortId(sid2) + "]")} ${chalk.white(sTitle)}  ·  ${chalk.dim(sTime)}${tagStr} ${chalk.bold("━━")}`);
+        const stRows = await queryAll(conn, `MATCH (s:Session {id: '${esc(sid2)}'})-[r:HAS_TURN]->(t:Turn) RETURN t, r.turnIndex AS idx ORDER BY r.turnIndex ASC`);
+        if (stRows.length === 0) { console.log(chalk.dim("  (no turns)")); continue; }
+        for (const r of stRows) {
+          const t = r["t"] as Record<string, unknown>;
+          const tTime = t["timestamp"] ? new Date(String(t["timestamp"])).toLocaleTimeString() : "";
+          const uText = String(t["userText"] || "").slice(0, 85);
+          const aText = String(t["assistantText"] || "").slice(0, 85);
+          console.log(`  ${chalk.dim("[" + Number(r["idx"]) + "]")}  ${chalk.dim(tTime)}`);
+          if (uText) console.log(`    ${chalk.dim("→")} ${uText}${String(t["userText"] || "").length > 85 ? "…" : ""}`);
+          if (aText) console.log(`      ${chalk.dim(aText)}${String(t["assistantText"] || "").length > 85 ? "…" : ""}`);
+        }
+      }
+      if (hidden > 0) console.log(chalk.dim(`\n↳ ${hidden} more — pensieve sessions --stream --limit ${sessions.length}`));
+      console.log("");
+      return;
+    }
+
+    // ── GROUP BY TAG ──────────────────────────────────────────────────
+    if (opts.groupByTag) {
+      const tagGroups = new Map<string, Record<string, unknown>[]>();
+      for (const s of displayed) {
+        const tv = String(s["tags"] || "").trim();
+        const tagList = tv ? tv.split(",").map((t) => t.trim()).filter(Boolean) : ["(untagged)"];
+        for (const tag of tagList) {
+          if (!tagGroups.has(tag)) tagGroups.set(tag, []);
+          tagGroups.get(tag)!.push(s);
+        }
+      }
+      console.log(`\n${chalk.bold.cyan(`SESSIONS BY TAG — ${sessions.length} total`)}`);
+      console.log(chalk.dim("═".repeat(60)));
+      for (const [tag, gs] of [...tagGroups.entries()].sort((a, b) => b[1].length - a[1].length)) {
+        console.log(`\n${chalk.bold.magenta("◆")} ${chalk.bold(tag)}  ${chalk.dim("(" + gs.length + ")")}`);
+        for (const s of gs) {
+          const sId2 = sessionShortId(String(s["id"]));
+          const tc = turnCounts.get(String(s["id"])) ?? 0;
+          const mc = memCounts.get(String(s["id"])) ?? 0;
+          const sTime = s["startedAt"] ? formatRelativeTime(String(s["startedAt"])) : "";
+          const { label, color } = getSessionStatus(s);
+          const statusStr = label !== "completed" ? "  " + color(label) : "";
+          console.log(`  ${chalk.dim("[" + sId2 + "]")}  ${chalk.white(String(s["title"] || "(untitled)").slice(0, 44).padEnd(44))}  ${chalk.dim(sTime.padEnd(8))}  T:${tc}  M:${mc}${statusStr}`);
+        }
+      }
+      if (hidden > 0) console.log(chalk.dim(`\n↳ ${hidden} more — pensieve sessions --all --group-by-tag`));
+      console.log(chalk.dim("\nview: pensieve sessions <id>  ·  stats: pensieve sessions --stats"));
+      console.log("");
+      return;
+    }
+
+    // ── DEFAULT LIST ──────────────────────────────────────────────────
+    let lastTurns = new Map<string, Array<{ t: Record<string, unknown>; idx: number }>>();
+    if (opts.turns) {
+      for (const s of displayed) {
+        const sid2 = String(s["id"]);
+        const ltRows = await queryAll(conn, `MATCH (s:Session {id: '${esc(sid2)}'})-[r:HAS_TURN]->(t:Turn) RETURN t, r.turnIndex AS idx ORDER BY r.turnIndex DESC LIMIT 3`);
+        lastTurns.set(sid2, ltRows.map((r) => ({ t: r["t"] as Record<string, unknown>, idx: Number(r["idx"] ?? 0) })).reverse());
+      }
+    }
+
+    const headerLine = `SESSIONS — ${allS.length} total  (${nActive} active  ·  ${nCompleted} completed  ·  ${nArchived} archived)`;
+    console.log(`\n${chalk.bold.cyan(headerLine)}`);
+    console.log(chalk.dim("═".repeat(Math.min(headerLine.length + 2, 80))));
+
+    const today2 = displayed.filter((s) => getRecencyBucket(String(s["startedAt"] || "")) === "today");
+    const week2 = displayed.filter((s) => getRecencyBucket(String(s["startedAt"] || "")) === "week");
+    const older2 = displayed.filter((s) => getRecencyBucket(String(s["startedAt"] || "")) === "older");
+
+    function renderRow(s: Record<string, unknown>): void {
+      const sId2 = sessionShortId(String(s["id"]));
+      const sTitle = String(s["title"] || "(untitled)").slice(0, 42);
+      const sTime = s["startedAt"] ? formatRelativeTime(String(s["startedAt"])) : "";
+      const sTags = String(s["tags"] || "").trim();
+      const tagDisplay = sTags ? sTags.split(",").map((t) => chalk.cyan(t.trim())).join(", ") : chalk.dim("—");
+      const tc = turnCounts.get(String(s["id"])) ?? 0;
+      const mc = memCounts.get(String(s["id"])) ?? 0;
+      const { label } = getSessionStatus(s);
+      const mark = label === "active" ? chalk.yellow("●") : label === "archived" ? chalk.dim("○") : chalk.green("✓");
+      console.log(`  ${mark} ${chalk.dim("[" + sId2 + "]")}  ${chalk.white(sTitle.padEnd(42))}  ${chalk.dim(sTime.padEnd(8))}  ${tagDisplay}  T:${tc}  M:${mc}`);
+      if (opts.turns) {
+        for (const { t, idx } of lastTurns.get(String(s["id"])) ?? []) {
+          const uT = String(t["userText"] || "").slice(0, 55);
+          const aT = String(t["assistantText"] || "").slice(0, 55);
+          console.log(`      ${chalk.dim("[" + idx + "]")} ${chalk.dim(uT + (String(t["userText"] || "").length > 55 ? "…" : ""))}  →  ${chalk.dim(aT + (String(t["assistantText"] || "").length > 55 ? "…" : ""))}`);
+        }
+      }
+    }
+
+    if (today2.length > 0) { console.log(chalk.bold.cyan(`\n◆ TODAY  (${today2.length})`)); today2.forEach(renderRow); }
+    if (week2.length > 0)  { console.log(chalk.bold.cyan(`\n◆ THIS WEEK  (${week2.length})`)); week2.forEach(renderRow); }
+    if (older2.length > 0) { console.log(chalk.bold.cyan(`\n◆ OLDER  (${older2.length} shown)`)); older2.forEach(renderRow); }
+    if (hidden > 0) console.log(chalk.dim(`\n  ↳ ${hidden} more — pensieve sessions --all or --limit ${sessions.length}`));
+
+    console.log(chalk.dim("\n" + "─".repeat(75)));
+    console.log(chalk.dim("view:   pensieve sessions <id>              turns:  pensieve sessions <id> --turns"));
+    console.log(chalk.dim("filter: --tag <name>  --status <s>          stream: pensieve sessions --stream"));
+    console.log(chalk.dim("stats:  pensieve sessions --stats            group:  pensieve sessions --group-by-tag"));
+    console.log(chalk.dim("all:    pensieve sessions --all              limit:  pensieve sessions --limit <n>"));
+    console.log("");
   });
 
 sessionsCmd

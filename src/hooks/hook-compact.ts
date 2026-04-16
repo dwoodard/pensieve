@@ -14,6 +14,7 @@ import { readProjectConfig } from "../config.js";
 import { getDb } from "../db.js";
 import { readSessionTurns } from "../update-summary.js";
 import { escape, queryAll } from "../kuzu-helpers.js";
+import { embed } from "../llm.js";
 import type { Task } from "../types.js";
 
 interface CompactPayload {
@@ -66,6 +67,13 @@ async function main(): Promise<void> {
             `MATCH (s:Session {id: '${escape(sessionId)}'})
              SET ${setClause.join(', ')}`
           );
+          const embedText = [title, summary, tags].filter(Boolean).join(". ");
+          if (embedText) {
+            embed(embedText).then((vec) => {
+              const lit = `[${vec.join(", ")}]`;
+              conn.query(`MATCH (s:Session {id: '${escape(sessionId)}'}) SET s.embedding = ${lit}`).catch(() => {});
+            }).catch(() => {});
+          }
         }
       } catch {
         // Don't block on summarization failure

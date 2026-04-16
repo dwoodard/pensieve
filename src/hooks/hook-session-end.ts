@@ -14,6 +14,7 @@ import { escape } from "../kuzu-helpers.js";
 import { summarizeSession } from "../extract-memory.js";
 import { captureSessionSummary } from "../index.js";
 import { readSessionTurns } from "../update-summary.js";
+import { embed } from "../llm.js";
 
 interface SessionEndPayload {
   session_id: string;
@@ -63,6 +64,13 @@ async function main(): Promise<void> {
             `MATCH (s:Session {id: '${escape(sessionId)}'})
              SET ${setClause.join(', ')}`
           );
+          const embedText = [title, summary, tags].filter(Boolean).join(". ");
+          if (embedText) {
+            embed(embedText).then((vec) => {
+              const lit = `[${vec.join(", ")}]`;
+              conn.query(`MATCH (s:Session {id: '${escape(sessionId)}'}) SET s.embedding = ${lit}`).catch(() => {});
+            }).catch(() => {});
+          }
           // Close session with summarization
           if (summary) {
             try {
