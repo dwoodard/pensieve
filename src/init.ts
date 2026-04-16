@@ -20,6 +20,37 @@ function checkDependencies(): string[] {
   return missing;
 }
 
+/**
+ * Ensure PLAYBOOK.md exists in the project for feature implementation guidance.
+ * Copies template from pensieve package if not present.
+ * Template is always located in: dist/templates/PLAYBOOK.md
+ */
+function ensurePlaybook(projectRoot: string): void {
+  const playbookPath = path.join(projectRoot, "PLAYBOOK.md");
+
+  // If PLAYBOOK already exists, we're done
+  if (fs.existsSync(playbookPath)) {
+    console.log(`  📖 PLAYBOOK.md (found)`);
+    return;
+  }
+
+  try {
+    // Template is always at: dist/templates/PLAYBOOK.md
+    // __dirname in dist/init.js points to dist/, so templates are at __dirname/templates
+    const templatePath = path.join(__dirname, "templates", "PLAYBOOK.md");
+
+    if (fs.existsSync(templatePath)) {
+      const template = fs.readFileSync(templatePath, "utf-8");
+      fs.writeFileSync(playbookPath, template);
+      console.log(`  📖 PLAYBOOK.md (created from template)`);
+    } else {
+      console.log(`  📖 PLAYBOOK.md (see pensieve docs for workflow guidance)`);
+    }
+  } catch {
+    // Silently skip if can't write (e.g., permissions issue)
+  }
+}
+
 function installAIPrompts(projectMemoryDir: string): void {
   // Find the package root (where docs/ai-prompts/ lives)
   const packageRoot = path.resolve(path.dirname(__filename), "..");
@@ -125,6 +156,10 @@ export async function initProject(cwd: string): Promise<boolean> {
   console.log(`  Path:   ${projectMemoryDir}`);
   console.log(`  Hooks:  .claude/settings.json`);
   console.log(`  Cmds:   .claude/commands/pensieve-{search,recall,log,file,task,walk,diff}.md`);
+
+  // Create or discover PLAYBOOK.md for feature implementation workflow
+  ensurePlaybook(projectRoot);
+
   console.log(`  Run "pensieve config" to set your LLM and embedding models.`);
 
   // Check for required dependencies
