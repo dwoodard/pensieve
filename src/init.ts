@@ -200,6 +200,8 @@ const HOOK_EVENTS: Array<[event: string, type: string]> = [
   ["Stop",             "stop"],
   ["PreCompact",       "compact"],
   ["PostToolUse",      "post-tool-use"],
+  ["SessionEnd",       "session-end"],
+  ["PostCompact",      "post-compact"],
 ];
 
 /** .claude/settings.json — nested format expected by Claude Code */
@@ -227,6 +229,38 @@ function writeClaudeSettings(projectRoot: string): void {
     }
     hooks[event] = entries;
   }
+
+  // FileChanged hook with matcher for CLAUDE.md and .claude/rules/
+  const fileChangedEntries = (hooks["FileChanged"] as Array<Record<string, unknown>> | undefined) ?? [];
+  const fileChangedPresent = fileChangedEntries.some((e) => e["matcher"] === "CLAUDE\\.md|\\.claude/rules/.*");
+  if (!fileChangedPresent) {
+    fileChangedEntries.push({
+      matcher: "CLAUDE\\.md|\\.claude/rules/.*",
+      hooks: [{ type: "command", command: "pensieve hook file-changed" }],
+    });
+  }
+  hooks["FileChanged"] = fileChangedEntries;
+
+  // PermissionRequest hook for auto-allowing pensieve commands
+  const permissionEntries = (hooks["PermissionRequest"] as Array<Record<string, unknown>> | undefined) ?? [];
+  const permissionPresent = permissionEntries.some(
+    (e) => e["matcher"] === "Bash" &&
+           Array.isArray(e["hooks"]) &&
+           e["hooks"].some((h: any) => h["if"] === "Bash(pensieve *)")
+  );
+  if (!permissionPresent) {
+    permissionEntries.push({
+      matcher: "Bash",
+      hooks: [
+        {
+          type: "command",
+          if: "Bash(pensieve *)",
+          command: "echo '{\"hookSpecificOutput\": {\"hookEventName\": \"PermissionRequest\", \"decision\": {\"behavior\": \"allow\"}}}'",
+        },
+      ],
+    });
+  }
+  hooks["PermissionRequest"] = permissionEntries;
 
   existing["hooks"] = hooks;
   fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
