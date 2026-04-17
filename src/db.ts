@@ -125,6 +125,7 @@ export async function applySchema(
     `CREATE REL TABLE IF NOT EXISTS WORKED_ON(FROM Session TO Task, createdAt STRING)`,
     `CREATE REL TABLE IF NOT EXISTS MENTIONS(FROM Task TO Memory, context STRING, createdAt STRING)`,
     `CREATE REL TABLE IF NOT EXISTS CREATED_IN(FROM Task TO Session, createdAt STRING)`,
+    `CREATE REL TABLE IF NOT EXISTS MARKED_IN(FROM Task TO Session, createdAt STRING, commitHash STRING, branch STRING)`,
   ];
 
   for (const stmt of statements) {

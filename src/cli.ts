@@ -625,9 +625,15 @@ program
       console.log(`  ${chalk.dim("Search:")}   pensieve search "${title.slice(0, 40).replace(/"/g, "")}" --walk`);
       console.log(`  ${chalk.dim("Walk:")}     pensieve walk --start-id memory:${displayId} --depth 2`);
     } else if (nodeType === "task") {
-      console.log(`  ${chalk.dim("Start:")}    pensieve tasks start ${displayId}`);
-      console.log(`  ${chalk.dim("Update:")}   pensieve tasks update ${displayId} "<text>"`);
+      const taskStatus = String(node["status"] ?? "");
+      if (taskStatus !== "done") {
+        console.log(`  ${chalk.dim("Start:")}    pensieve tasks start ${displayId}`);
+        console.log(`  ${chalk.dim("Update:")}   pensieve tasks update ${displayId} "<text>"`);
+      }
       console.log(`  ${chalk.dim("Walk:")}     pensieve walk --start-id task:${displayId} --depth 2`);
+      if (taskStatus === "done") {
+        console.log(`  ${chalk.dim("Completed:")} pensieve walk --start-id task:${displayId} --relations MARKED_IN`);
+      }
     } else if (nodeType === "session") {
       console.log(`  ${chalk.dim("Turns:")}    pensieve sessions ${displayId} --turns`);
       console.log(`  ${chalk.dim("Similar:")}  pensieve sessions ${displayId} --similar`);
@@ -1848,6 +1854,27 @@ tasksCmd
 
     const now = new Date().toISOString();
 
+    // Git + session context for MARKED_IN edge
+    let gitCommitHash = "";
+    let gitBranch = "";
+    try {
+      gitCommitHash = execSync("git rev-parse HEAD", {
+        cwd: process.cwd(),
+        stdio: ["pipe", "pipe", "pipe"],
+      }).toString().trim().slice(0, 40);
+    } catch { /* not a git repo or no commits */ }
+    try {
+      const b = execSync("git rev-parse --abbrev-ref HEAD", {
+        cwd: process.cwd(),
+        stdio: ["pipe", "pipe", "pipe"],
+      }).toString().trim();
+      gitBranch = b === "HEAD" ? "" : b;
+    } catch { /* detached HEAD or not a git repo */ }
+    const sessionRows = await queryAll(conn,
+      `MATCH (s:Session {projectId: '${pid}'})
+       RETURN s.id AS sessionId ORDER BY s.startedAt DESC LIMIT 1`);
+    const markedInSessionId = String(sessionRows[0]?.["sessionId"] ?? "");
+
     // Fetch all tasks upfront for both paths
     const allRows = await queryAll(conn,
       `MATCH (m:Task {projectId: '${pid}'})
@@ -1860,6 +1887,18 @@ tasksCmd
         `MATCH (m:Task {id: '${esc(taskId)}'})
          SET m.status = 'done', m.completedAt = '${now}', m.completionNote = '${esc(note)}', m.doneSuggestion = ''`
       );
+      // Create MARKED_IN edge to session with git context
+      if (markedInSessionId) {
+        await conn.query(
+          `MATCH (t:Task {id: '${esc(taskId)}'}), (s:Session {id: '${esc(markedInSessionId)}'})
+           WHERE NOT EXISTS { MATCH (t)-[:MARKED_IN]->(s) }
+           CREATE (t)-[:MARKED_IN {
+             createdAt: '${esc(now)}',
+             commitHash: '${esc(gitCommitHash)}',
+             branch: '${esc(gitBranch)}'
+           }]->(s)`
+        ).catch(() => {}); // best-effort
+      }
       console.log(`${chalk.green("Done:")} ${taskTitle}`);
       if (note) console.log(chalk.dim(`  "${note}"`));
 
