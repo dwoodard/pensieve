@@ -1425,7 +1425,8 @@ function printTaskList(
   suggestedDone: Record<string, unknown>[] = [],
   inReview: Record<string, unknown>[] = [],
   ghIssues: Map<string, { state: string; title: string }> = new Map(),
-  issues: Array<{ number: number; title: string }> = []
+  issues: Array<{ number: number; title: string }> = [],
+  showDone: boolean = false
 ): void {
   if (!active && pending.length === 0 && blocked.length === 0 && done.length === 0 && suggestedDone.length === 0 && inReview.length === 0) {
     console.log("No tasks. Add one: pensieve tasks add \"title\"");
@@ -1515,9 +1516,18 @@ function printTaskList(
     }
   }
 
-  // DONE section - collapsed
+  // DONE section
   if (done.length > 0) {
-    console.log(chalk.dim(`\n✓ DONE (${done.length})  —  Run: pensieve tasks --done`));
+    if (showDone) {
+      console.log(chalk.bold.green(`\n✓ DONE (${done.length})`));
+      done.forEach((t) => {
+        const titleFormatted = formatTaskTitleWithBranch(t, ghIssues);
+        const id = chalk.dim("[" + shortId(String(t["id"])) + "]");
+        console.log(`  ${titleFormatted}  ${id}`);
+      });
+    } else {
+      console.log(chalk.dim(`\n✓ DONE (${done.length})  —  Run: pensieve tasks --done`));
+    }
   }
 
   // Footer with command suggestions
@@ -1622,7 +1632,8 @@ tasksCmd
         suggestedDoneRows.map((r) => r["m"] as Record<string, unknown>),
         inReviewRows.map((r) => r["m"] as Record<string, unknown>),
         ghIssues,
-        issuesList
+        issuesList,
+        opts.done
       );
     }
   });
@@ -1904,6 +1915,13 @@ tasksCmd
 
       // If this is a parent task, cascade to pending children
       const taskRecord = all.find((t) => String(t["id"]) === taskId);
+
+      // Context hint: if task is linked to GitHub issue, remind to close it
+      const ghIssueId = taskRecord?.["githubIssueId"];
+      if (ghIssueId) {
+        console.log(chalk.yellow(`  ⚠ Linked to #${ghIssueId} — close it: gh issue close ${ghIssueId}`) + chalk.dim(` (if appropriate)`));
+      }
+
       if (taskRecord && (!taskRecord["parentId"] || taskRecord["parentId"] === "")) {
         // This is a top-level task, cascade to its children
         const childRows = await queryAll(conn,
